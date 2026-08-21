@@ -10,6 +10,12 @@ import { PanelAction, shellHtml, stateBody } from "./webviewHtml";
 
 export { PanelAction };
 
+/** Whether the current VS Code theme is dark (drives the webview color-scheme). */
+export function vscodeThemeDark(): boolean {
+  const kind = vscode.window.activeColorTheme.kind;
+  return kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
+}
+
 export class ChatPanel {
   private static readonly viewType = "dsh.chatPanel";
   private panel?: vscode.WebviewPanel;
@@ -74,6 +80,6 @@ export class ChatPanel {
 
   private render(): void {
     if (this.panel === undefined) return;
-    this.panel.webview.html = shellHtml(stateBody(this.lastInfo));
+    this.panel.webview.html = shellHtml(stateBody(this.lastInfo), vscodeThemeDark());
   }
 }

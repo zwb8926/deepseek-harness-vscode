@@ -70,7 +70,7 @@ button.secondary:hover { background: var(--vscode-button-secondaryHoverBackgroun
 }
 `;
 
-export function shellHtml(body: string): string {
+export function shellHtml(body: string, dark: boolean): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -78,7 +78,10 @@ export function shellHtml(body: string): string {
 <meta http-equiv="Content-Security-Policy" content="${CSP}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DeepSeek Harness</title>
-<style>${BASE_CSS}</style>
+<style>${BASE_CSS}
+/* Drive the nested iframe's prefers-color-scheme from the VS Code theme. */
+:root { color-scheme: ${dark ? "dark" : "light"}; }
+</style>
 </head>
 <body>
 <div id="stage">${body}</div>

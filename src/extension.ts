@@ -125,8 +125,7 @@ export function activate(context: vscode.ExtensionContext): void {
   async function syncTheme(): Promise<void> {
     if (!getCfg("followVscodeTheme", true)) return;
     if (!manager.running) return;
-    const ok = await manager.applyTheme(isDarkTheme() ? "dark" : "light");
-    if (ok) panel.reload(); // re-read the boot-injected theme
+    await manager.applyTheme(isDarkTheme() ? "dark" : "light");
   }
 
   async function handlePanelAction(action: PanelAction): Promise<void> {
@@ -232,9 +231,12 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!e.affectsConfiguration("dsh")) return;
       log("settings changed — new values apply on the next start (port/home/args)");
     }),
-    // Keep the embedded dsh UI in lockstep with the VS Code theme.
+    // Keep the embedded dsh UI in lockstep with the VS Code theme: push the
+    // preference into dsh settings AND re-render the webview color-scheme.
     vscode.window.onDidChangeActiveColorTheme(() => {
       void syncTheme();
+      panel.reload();
+      launcher.reload();
     })
   );
 
