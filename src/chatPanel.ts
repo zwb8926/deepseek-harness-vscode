@@ -34,7 +34,10 @@ export class ChatPanel {
           localResourceRoots: []
         }
       );
-      this.panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon.png");
+      this.panel.iconPath = {
+        light: vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon-black.png"),
+        dark: vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon-white.png")
+      };
       const disposables: vscode.Disposable[] = [];
       this.panel.onDidDispose(
         () => {

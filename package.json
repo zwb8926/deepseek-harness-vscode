@@ -82,7 +82,10 @@
         {
           "id": "dsh",
           "title": "DeepSeek Harness",
-          "icon": "media/dsh-icon.svg"
+          "icon": {
+            "light": "media/dsh-icon-black.svg",
+            "dark": "media/dsh-icon-white.svg"
+          }
         }
       ]
     },
