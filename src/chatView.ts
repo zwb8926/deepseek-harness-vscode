@@ -1,21 +1,21 @@
 /**
- * LauncherViewProvider — the activity-bar view behind the whale icon.
+ * LauncherViewProvider — the activity-bar sidebar panel behind the whale icon.
  *
- * VS Code requires an activity-bar icon to own at least one view, but the
- * desired UX is Claude-like: clicking the icon opens the chat as an editor
- * tab and leaves no plugin content in the sidebar. This view therefore
- * renders an empty page and, the moment it becomes visible, opens the chat
- * panel and closes the sidebar again — an imperceptible flash at most.
+ * The sidebar's job is session control: a "new session" entry and the server
+ * status. The chat UI itself always opens as a full editor tab.
  */
 
 import * as vscode from "vscode";
+import type { DshRuntimeInfo } from "./dshManager";
+import { PanelAction, launcherBody, shellHtml } from "./webviewHtml";
 
 export class LauncherViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "dsh.launcher";
 
   private view?: vscode.WebviewView;
+  private lastInfo?: DshRuntimeInfo;
 
-  constructor(private readonly onVisible: () => void) {}
+  constructor(private readonly onAction: (action: PanelAction) => void) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -23,13 +23,28 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: []
     };
-    // Empty content: the sidebar must never show plugin UI.
-    webviewView.webview.html = "<!DOCTYPE html><html><body></body></html>";
-    webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible) this.onVisible();
+    webviewView.webview.onDidReceiveMessage((msg: unknown) => {
+      if (msg !== null && typeof msg === "object" && typeof (msg as PanelAction).type === "string") {
+        this.onAction(msg as PanelAction);
+      }
     });
     webviewView.onDidDispose(() => {
       this.view = undefined;
     });
+    this.render();
+  }
+
+  update(info?: DshRuntimeInfo): void {
+    this.lastInfo = info;
+    this.render();
+  }
+
+  reload(): void {
+    this.render();
+  }
+
+  private render(): void {
+    if (this.view === undefined) return;
+    this.view.webview.html = shellHtml(launcherBody(this.lastInfo));
   }
 }

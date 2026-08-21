@@ -41,6 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onInfo: (info) => {
       renderStatus(info);
       panel.update(info);
+      launcher.update(info);
     },
     log
   });
@@ -52,13 +53,10 @@ export function activate(context: vscode.ExtensionContext): void {
     context.extensionUri
   );
 
-  // Activity-bar whale icon → chat opens as a full editor tab; the sidebar
-  // view is empty and closes immediately, so no plugin UI ever lives there.
-  const launcher = new LauncherViewProvider(() => {
-    void openChatInEditor();
-    void vscode.commands.executeCommand("workbench.action.closeSidebar").then(undefined, () => {
-      /* best-effort: sidebar may already be closed */
-    });
+  // Activity-bar whale icon → sidebar panel with session controls; the chat
+  // itself always opens as a full editor tab.
+  const launcher = new LauncherViewProvider((action: PanelAction) => {
+    void handlePanelAction(action);
   });
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcher, {
@@ -95,8 +93,26 @@ export function activate(context: vscode.ExtensionContext): void {
     await manager.start();
   }
 
+  async function newSession(): Promise<void> {
+    if (!manager.running) {
+      await ensureStarted();
+    }
+    if (!manager.running) return; // start failed; the error state explains why
+    const sessionId = await manager.createSession();
+    if (sessionId === undefined) {
+      void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
+      return;
+    }
+    log(`created session: ${sessionId}`);
+    panel.open();
+    panel.reload();
+  }
+
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
+      case "new-session":
+        await newSession();
+        break;
       case "open-chat":
         await openChatInEditor();
         break;
@@ -113,6 +129,7 @@ export function activate(context: vscode.ExtensionContext): void {
         break;
       case "reload":
         panel.reload();
+        launcher.reload();
         break;
       case "open-browser":
         await openInBrowser();

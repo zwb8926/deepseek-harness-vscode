@@ -159,6 +159,14 @@ async function main(): Promise<void> {
   const unknown = await httpJson("POST", url + "/api/__smoke_nope__", envelope);
   check("unknown endpoint → 404", unknown.status === 404, `status=${unknown.status}`);
 
+  const created = await httpJson("POST", url + "/api/session.create", {
+    type: "client-request",
+    rpcId: "smoke-2",
+    method: "session.create",
+    payload: {}
+  });
+  check("session.create succeeds", created.status === 200 && created.text.includes('"ok":true') && created.text.includes("sessionId"), `status=${created.status} body=${created.text.slice(0, 160)}`);
+
   const get = await httpJson("GET", url + "/api/llm.providers");
   check("GET /api/<endpoint> → 404/426 (not 403)", get.status !== 403, `status=${get.status}`);
 

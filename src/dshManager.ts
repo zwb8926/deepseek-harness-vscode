@@ -173,6 +173,66 @@ export class DshManager {
     return body !== undefined && body.includes("__DSH_BOOT__");
   }
 
+  /** POST one /api RPC envelope; returns the parsed response value or undefined. */
+  private async rpc(method: string, payload: unknown): Promise<unknown | undefined> {
+    const url = this.url;
+    if (url === undefined || this.state !== "running") return undefined;
+    const envelope = {
+      type: "client-request",
+      rpcId: `dsh-vsc-${Date.now()}`,
+      method,
+      payload
+    };
+    return new Promise((resolve) => {
+      const body = JSON.stringify(envelope);
+      const req = http.request(
+        new URL(`${url}/api/${method}`),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(body)
+          },
+          timeout: 15_000
+        },
+        (res) => {
+          let text = "";
+          res.on("data", (chunk: Buffer) => (text += chunk.toString("utf8")));
+          res.on("end", () => {
+            try {
+              const parsed = JSON.parse(text) as {
+                result?: { ok?: boolean; value?: unknown; error?: { message?: string } };
+              };
+              if (parsed.result?.ok === true) resolve(parsed.result.value);
+              else {
+                this.opts.log(`rpc ${method} failed: ${parsed.result?.error?.message ?? text.slice(0, 200)}`);
+                resolve(undefined);
+              }
+            } catch {
+              resolve(undefined);
+            }
+          });
+        }
+      );
+      req.on("timeout", () => {
+        this.opts.log(`rpc ${method} timed out`);
+        req.destroy();
+        resolve(undefined);
+      });
+      req.on("error", (err) => {
+        this.opts.log(`rpc ${method} error: ${String(err)}`);
+        resolve(undefined);
+      });
+      req.end(body);
+    });
+  }
+
+  /** Create a new dsh session via the running server; returns the sessionId. */
+  async createSession(): Promise<string | undefined> {
+    const value = (await this.rpc("session.create", {})) as { sessionId?: string } | undefined;
+    return value?.sessionId;
+  }
+
   // ------------------------------------------------------------------ start
 
   async start(): Promise<void> {

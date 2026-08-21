@@ -10,7 +10,7 @@
 import type { DshRuntimeInfo } from "./dshManager";
 
 export interface PanelAction {
-  type: "open-chat" | "open-browser" | "start" | "stop" | "restart" | "reload" | "show-logs";
+  type: "new-session" | "open-chat" | "open-browser" | "start" | "stop" | "restart" | "reload" | "show-logs";
 }
 
 const CSP = [
@@ -59,6 +59,16 @@ button {
 button:hover { background: var(--vscode-button-hoverBackground); }
 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
 button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.launcher { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.launcher h1 { font-size: 13px; margin: 0; }
+.launcher button.primary { padding: 8px 0; font-weight: 600; }
+.launcher .status {
+  font-size: 11px; line-height: 1.5; padding: 6px 8px; border-radius: 6px;
+  background: var(--vscode-textBlockQuote-background);
+  border: 1px solid var(--vscode-widget-border, transparent);
+  color: var(--vscode-descriptionForeground);
+  word-break: break-all;
+}
 `;
 
 export function shellHtml(body: string): string {
@@ -101,6 +111,39 @@ function placeholderHtml(title: string, detail: string): string {
   <p>${detail}</p>
   <p><code>DeepSeek Harness</code> logs keep the full startup trace.</p>
 </div>`;
+}
+
+/** Sidebar panel: create-session entry + server status. The chat lives in the editor. */
+export function launcherBody(info?: DshRuntimeInfo): string {
+  const status =
+    info?.state === "running" && info.url !== undefined
+      ? `<div class="status">${escapeHtml(info.url)}${info.external === true ? " (adopted)" : ""}</div>`
+      : `<div class="status">${stateLabelOf(info)}</div>`;
+  return `<div class="launcher">
+  <h1>DeepSeek Harness</h1>
+  <button class="primary" data-cmd="new-session">＋ 新建会话</button>
+  <button data-cmd="open-chat">打开聊天</button>
+  ${status}
+</div>`;
+}
+
+function stateLabelOf(info?: DshRuntimeInfo): string {
+  switch (info?.state) {
+    case "running":
+      return "运行中";
+    case "locating":
+      return "正在定位 dsh CLI…";
+    case "installing":
+      return "正在安装…";
+    case "starting":
+      return "正在启动…";
+    case "error":
+      return "错误 — " + escapeHtml(info.detail ?? "未知");
+    case "stopped":
+      return "已停止";
+    default:
+      return "空闲";
+  }
 }
 
 /** Build the #stage body for one runtime state. */
