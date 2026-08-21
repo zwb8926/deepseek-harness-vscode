@@ -1,6 +1,6 @@
 # DSH for VS Code
 
-**项目地址：https://github.com/zwb8926/ds-harness-for-vscode**
+**项目地址：https://github.com/zwb8926/deepseekharness-for-vscode**
 
 在 VS Code 中使用 [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)。
 
