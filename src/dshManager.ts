@@ -285,6 +285,33 @@ export class DshManager {
     return value?.sessionId;
   }
 
+  /** Ensure a real workspace record exists for `path` (idempotent); returns its workspaceId. */
+  async ensureWorkspace(path: string): Promise<string | undefined> {
+    const value = (await this.rpc("workspace.create", { path })) as
+      | { workspace?: { workspaceId?: string }; created?: boolean }
+      | undefined;
+    if (value?.workspace?.workspaceId === undefined) {
+      this.opts.log(`ensureWorkspace: could not create/adopt workspace for ${path}`);
+      return undefined;
+    }
+    this.opts.log(`ensureWorkspace: ${path} -> ${value.workspace.workspaceId}${value.created === true ? " (created)" : " (existing)"}`);
+    return value.workspace.workspaceId;
+  }
+
+  /**
+   * Create a session bound to a real workspace for `path` (the flow the GUI
+   * groups by). Falls back to a bare cwd session when the workspace record
+   * cannot be created.
+   */
+  async createSessionInWorkspace(path: string): Promise<string | undefined> {
+    const workspaceId = await this.ensureWorkspace(path);
+    if (workspaceId !== undefined) {
+      const value = (await this.rpc("session.create", { workspaceId })) as { sessionId?: string } | undefined;
+      if (value?.sessionId !== undefined) return value.sessionId;
+    }
+    return this.createSession(path);
+  }
+
   /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */
   async applyTheme(preference: "light" | "dark" | "system"): Promise<boolean> {
     const value = await this.rpc("settings.update", { ns: "ui-theme", patch: { preference } });

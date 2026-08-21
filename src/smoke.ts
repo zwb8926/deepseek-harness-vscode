@@ -233,8 +233,17 @@ async function main(): Promise<void> {
   check("GET /api/<endpoint> → 404/426 (not 403)", get.status !== 403, `status=${get.status}`);
 
   console.log("— workspace & theme —");
-  const createdWithCwd = await manager.createSession(home);
-  check("session.create with cwd works", createdWithCwd !== undefined, `sessionId=${createdWithCwd ?? "none"}`);
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-project-"));
+  const wsSession = await manager.createSessionInWorkspace(projectDir);
+  check("createSessionInWorkspace returns a session", wsSession !== undefined, `sessionId=${wsSession ?? "none"}`);
+  const wsList = await httpJson("POST", url + "/api/workspace.list", {
+    type: "client-request",
+    rpcId: "smoke-ws",
+    method: "workspace.list",
+    payload: {}
+  });
+  const escapedPath = projectDir.replace(/\\/g, "\\\\");
+  check("workspace.list contains the project path", wsList.status === 200 && wsList.text.includes(escapedPath), `status=${wsList.status} body=${wsList.text.slice(0, 300)}`);
   const themeOk = await manager.applyTheme("dark");
   check("settings.update ui-theme works", themeOk === true, `applied=${themeOk}`);
 

@@ -103,10 +103,10 @@ export function activate(context: vscode.ExtensionContext): void {
       await ensureStarted();
     }
     if (!manager.running) return; // start failed; the error state explains why
-    // Bind the new session to the current VS Code project so the dsh
-    // workspace defaults to it (dsh workspaceRoot = server cwd).
+    // Bind the new session to a real workspace record for the current VS
+    // Code project, so the dsh workspace list groups it under the project.
     const project = workspaceCwd();
-    const sessionId = await manager.createSession(project);
+    const sessionId = await manager.createSessionInWorkspace(project);
     if (sessionId === undefined) {
       void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
       return;
