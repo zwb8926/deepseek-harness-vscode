@@ -278,10 +278,22 @@ export class DshManager {
     });
   }
 
-  /** Create a new dsh session via the running server; returns the sessionId. */
-  async createSession(): Promise<string | undefined> {
-    const value = (await this.rpc("session.create", {})) as { sessionId?: string } | undefined;
+  /** Create a new dsh session via the running server; returns the sessionId.
+   * Pass `cwd` to bind the session to a project directory (dsh workspace). */
+  async createSession(cwd?: string): Promise<string | undefined> {
+    const value = (await this.rpc("session.create", cwd === undefined ? {} : { cwd })) as { sessionId?: string } | undefined;
     return value?.sessionId;
+  }
+
+  /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */
+  async applyTheme(preference: "light" | "dark" | "system"): Promise<boolean> {
+    const value = await this.rpc("settings.update", { ns: "ui-theme", patch: { preference } });
+    if (value === undefined) {
+      this.opts.log(`applyTheme: could not set ui-theme.preference=${preference}`);
+      return false;
+    }
+    this.opts.log(`applyTheme: ui-theme.preference=${preference} applied`);
+    return true;
   }
 
   // ------------------------------------------------------------------ start

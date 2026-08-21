@@ -42,6 +42,9 @@ export function activate(context: vscode.ExtensionContext): void {
       renderStatus(info);
       panel.update(info);
       launcher.update(info);
+      if (info.state === "running" && info.url !== undefined) {
+        void syncTheme();
+      }
     },
     log
   });
@@ -100,14 +103,30 @@ export function activate(context: vscode.ExtensionContext): void {
       await ensureStarted();
     }
     if (!manager.running) return; // start failed; the error state explains why
-    const sessionId = await manager.createSession();
+    // Bind the new session to the current VS Code project so the dsh
+    // workspace defaults to it (dsh workspaceRoot = server cwd).
+    const project = workspaceCwd();
+    const sessionId = await manager.createSession(project);
     if (sessionId === undefined) {
       void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
       return;
     }
-    log(`created session: ${sessionId}`);
+    log(`created session: ${sessionId} (cwd: ${project})`);
     panel.open();
     panel.reload();
+  }
+
+  function isDarkTheme(): boolean {
+    const kind = vscode.window.activeColorTheme.kind;
+    return kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
+  }
+
+  /** Push the current VS Code theme into the dsh UI (ui-theme.preference). */
+  async function syncTheme(): Promise<void> {
+    if (!getCfg("followVscodeTheme", true)) return;
+    if (!manager.running) return;
+    const ok = await manager.applyTheme(isDarkTheme() ? "dark" : "light");
+    if (ok) panel.reload(); // re-read the boot-injected theme
   }
 
   async function handlePanelAction(action: PanelAction): Promise<void> {
@@ -212,6 +231,10 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration("dsh")) return;
       log("settings changed — new values apply on the next start (port/home/args)");
+    }),
+    // Keep the embedded dsh UI in lockstep with the VS Code theme.
+    vscode.window.onDidChangeActiveColorTheme(() => {
+      void syncTheme();
     })
   );
 

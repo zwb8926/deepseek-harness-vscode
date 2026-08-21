@@ -2,7 +2,7 @@
   "name": "ds-harness-for-vscode",
   "displayName": "DSH for VS Code",
   "description": "DeepSeek Harness inside VS Code: auto-starts the dsh web server and opens the full chat/session/tool/approval UI as an editor tab (Claude-style), with start/stop control, status bar, and open-in-browser.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "zwb8926",
   "icon": "media/dsh-icon-outline.png",
   "license": "MIT",
@@ -154,7 +154,12 @@
         "dsh.workspaceRoot": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Working directory for the dsh process. Empty = the first workspace folder, or the user home when no folder is open."
+          "markdownDescription": "Working directory for the dsh process (the dsh workspace defaults to it). Empty = the current VS Code project (first workspace folder), or the user home when no folder is open."
+        },
+        "dsh.followVscodeTheme": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "让内嵌的 dsh UI 主题跟随 VS Code 编辑器主题（通过 dsh 的 ui-theme.preference 设置自动切换深色/浅色），而不是跟随系统。"
         }
       }
     }

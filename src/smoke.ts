@@ -232,6 +232,12 @@ async function main(): Promise<void> {
   const get = await httpJson("GET", url + "/api/llm.providers");
   check("GET /api/<endpoint> → 404/426 (not 403)", get.status !== 403, `status=${get.status}`);
 
+  console.log("— workspace & theme —");
+  const createdWithCwd = await manager.createSession(home);
+  check("session.create with cwd works", createdWithCwd !== undefined, `sessionId=${createdWithCwd ?? "none"}`);
+  const themeOk = await manager.applyTheme("dark");
+  check("settings.update ui-theme works", themeOk === true, `applied=${themeOk}`);
+
   console.log("— stop —");
   await manager.stop();
   check("stopped state", manager.info.state === "stopped", `state=${manager.info.state}`);
