@@ -232,6 +232,23 @@ async function main(): Promise<void> {
   const get = await httpJson("GET", url + "/api/llm.providers");
   check("GET /api/<endpoint> → 404/426 (not 403)", get.status !== 403, `status=${get.status}`);
 
+  console.log("— workspace & theme —");
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-project-"));
+  const wsSession = await manager.createSessionInWorkspace(projectDir);
+  check("createSessionInWorkspace returns a session", wsSession !== undefined, `sessionId=${wsSession ?? "none"}`);
+  const wsList = await httpJson("POST", url + "/api/workspace.list", {
+    type: "client-request",
+    rpcId: "smoke-ws",
+    method: "workspace.list",
+    payload: {}
+  });
+  const escapedPath = projectDir.replace(/\\/g, "\\\\");
+  check("workspace.list contains the project path", wsList.status === 200 && wsList.text.includes(escapedPath), `status=${wsList.status} body=${wsList.text.slice(0, 300)}`);
+  const sessions = await manager.listSessions();
+  check("session.list reports the project cwd", (sessions ?? []).some((s) => s.cwd === projectDir), `sessions=${JSON.stringify(sessions?.map((s) => ({ id: s.sessionId, cwd: s.cwd })))}`);
+  const themeOk = await manager.applyTheme("dark");
+  check("settings.update ui-theme works", themeOk === true, `applied=${themeOk}`);
+
   console.log("— stop —");
   await manager.stop();
   check("stopped state", manager.info.state === "stopped", `state=${manager.info.state}`);

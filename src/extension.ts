@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const autoInstallDir = path.join(context.globalStorageUri.fsPath, "dsh-cli");
 
   const manager = new DshManager({
-    port: getCfg("port", 3080),
+    port: getCfg("port", 0),
     home: getCfg("home", ""),
     cliPath: getCfg("cliPath", ""),
     cwd: workspaceCwd(),
@@ -42,6 +42,9 @@ export function activate(context: vscode.ExtensionContext): void {
       renderStatus(info);
       panel.update(info);
       launcher.update(info);
+      if (info.state === "running" && info.url !== undefined) {
+        void syncTheme();
+      }
     },
     log
   });
@@ -71,15 +74,31 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
+  /** Resolve the current VS Code project directory at click time.
+   *  Order: dsh.workspaceRoot setting → the workspace folder containing the
+   *  active file → the first workspace folder → the active file's directory
+   *  → the user home (logged; the launcher shows the resolved path). */
   function workspaceCwd(): string {
     const configuredRoot = getCfg("workspaceRoot", "");
-    return configuredRoot !== "" ? configuredRoot : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir());
+    if (configuredRoot !== "") return configuredRoot;
+    const active = vscode.window.activeTextEditor?.document.uri;
+    if (active !== undefined && active.scheme === "file") {
+      const containing = vscode.workspace.getWorkspaceFolder(active);
+      if (containing !== undefined) return containing.uri.fsPath;
+    }
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (folder !== undefined && folder !== "") return folder;
+    if (active !== undefined && active.scheme === "file") {
+      const dir = path.dirname(active.fsPath);
+      if (dir !== "") return dir;
+    }
+    return os.homedir();
   }
 
   /** Refresh spawn-relevant options from settings before a start. */
   function syncOptions(): void {
     manager.configure({
-      port: getCfg("port", 3080),
+      port: getCfg("port", 0),
       home: getCfg("home", ""),
       cliPath: getCfg("cliPath", ""),
       extraArgs: getCfg("extraArgs", []),
@@ -95,25 +114,72 @@ export function activate(context: vscode.ExtensionContext): void {
     await manager.start();
   }
 
-  async function newSession(): Promise<void> {
+  /**
+   * 打开DSH：取当前项目路径 → 查该项目的会话 → 有则打开，没有才新建。
+   * The GUI boots into the persisted selection or the most recent workspace,
+   * so the target session is chosen as the project's most recently updated.
+   */
+  async function openOrCreateSession(): Promise<void> {
     if (!manager.running) {
       await ensureStarted();
     }
     if (!manager.running) return; // start failed; the error state explains why
-    const sessionId = await manager.createSession();
-    if (sessionId === undefined) {
+    // Resolve the current VS Code project AT CLICK TIME and surface it.
+    const project = workspaceCwd();
+    manager.setProject(project);
+    log(`workspaceCwd: ${project}`);
+
+    // 1. Adopt/create the workspace record for the project.
+    const workspaceId = await manager.ensureWorkspace(project);
+
+    // 2. Look at existing sessions bound to this project.
+    let target: string | undefined;
+    if (workspaceId !== undefined) {
+      const ws = (await manager.listWorkspaces())?.find((w) => w.workspaceId === workspaceId);
+      if (ws !== undefined && ws.sessionIds.length > 0) {
+        const summaries = (await manager.listSessions()) ?? [];
+        const candidates = summaries.filter((s) => ws.sessionIds.includes(s.sessionId) || s.cwd === project);
+        const best = [...candidates].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        target = best?.sessionId;
+      }
+    }
+
+    // 3. None exists — create one bound to the project.
+    if (target === undefined) {
+      target = await manager.createSessionInWorkspace(project);
+      log(`created session: ${target ?? "?"} (workspace: ${project})`);
+    } else {
+      log(`opening existing session: ${target} (workspace: ${project})`);
+    }
+
+    if (target === undefined) {
       void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
       return;
     }
-    log(`created session: ${sessionId}`);
     panel.open();
     panel.reload();
+
+    // Verification: log the real workspace records so failures are visible.
+    const workspaces = await manager.listWorkspaces();
+    log(`workspace.list: ${JSON.stringify(workspaces?.map((w) => ({ title: w.title, path: w.path, sessions: w.sessionIds.length })))}`);
+  }
+
+  function isDarkTheme(): boolean {
+    const kind = vscode.window.activeColorTheme.kind;
+    return kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
+  }
+
+  /** Push the current VS Code theme into the dsh UI (ui-theme.preference). */
+  async function syncTheme(): Promise<void> {
+    if (!getCfg("followVscodeTheme", true)) return;
+    if (!manager.running) return;
+    await manager.applyTheme(isDarkTheme() ? "dark" : "light");
   }
 
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
       case "new-session":
-        await newSession();
+        await openOrCreateSession();
         break;
       case "open-chat":
         await openChatInEditor();
@@ -212,6 +278,13 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration("dsh")) return;
       log("settings changed — new values apply on the next start (port/home/args)");
+    }),
+    // Keep the embedded dsh UI in lockstep with the VS Code theme: push the
+    // preference into dsh settings AND re-render the webview color-scheme.
+    vscode.window.onDidChangeActiveColorTheme(() => {
+      void syncTheme();
+      panel.reload();
+      launcher.reload();
     })
   );
 

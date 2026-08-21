@@ -1,8 +1,8 @@
 {
-  "name": "dsh-for-vscode",
-  "displayName": "DSH for VS Code",
+  "name": "deepseekharness-for-vscode",
+  "displayName": "DeepSeek Harness for VS Code",
   "description": "DeepSeek Harness inside VS Code: auto-starts the dsh web server and opens the full chat/session/tool/approval UI as an editor tab (Claude-style), with start/stop control, status bar, and open-in-browser.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "zwb8926",
   "icon": "media/dsh-icon-outline.png",
   "license": "MIT",
@@ -15,9 +15,11 @@
     "Machine Learning"
   ],
   "keywords": [
+    "dsh",
+    "deep",
     "deepseek",
     "harness",
-    "dsh",
+    "deepseekharness",
     "agent",
     "chat"
   ],
@@ -101,10 +103,10 @@
       "properties": {
         "dsh.port": {
           "type": "number",
-          "default": 3080,
+          "default": 0,
           "minimum": 0,
           "maximum": 65535,
-          "markdownDescription": "Port for the embedded dsh web server. `0` lets the OS pick a free port. If a dsh server is already listening on this port, the extension adopts it instead of starting a new process."
+          "markdownDescription": "内嵌 dsh 服务端口。**默认 `0` = 每次启动由系统随机分配**：全新端口 = 全新浏览器 origin，GUI 不会继承浏览器里持久化的旧会话选中，启动时自动打开最新工作区（当前项目）。如果你显式设置了端口（如 3080），且该端口已有 dsh 服务，扩展会接管它（注意：固定端口会复用浏览器 localStorage 的会话选中，可能不会自动切到当前项目工作区）。"
         },
         "dsh.home": {
           "type": "string",
@@ -152,7 +154,12 @@
         "dsh.workspaceRoot": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Working directory for the dsh process. Empty = the first workspace folder, or the user home when no folder is open."
+          "markdownDescription": "Working directory for the dsh process (the dsh workspace defaults to it). Empty = the current VS Code project (first workspace folder), or the user home when no folder is open."
+        },
+        "dsh.followVscodeTheme": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "让内嵌的 dsh UI 主题跟随 VS Code 编辑器主题（通过 dsh 的 ui-theme.preference 设置自动切换深色/浅色），而不是跟随系统。"
         }
       }
     }

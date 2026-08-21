@@ -41,6 +41,8 @@ export interface DshRuntimeInfo {
   external?: boolean;
   /** Human-readable detail, usually an error message. */
   detail?: string;
+  /** The current VS Code project directory resolved at click time. */
+  project?: string;
 }
 
 export interface DshOptions {
@@ -129,6 +131,7 @@ export class DshManager {
   private url?: string;
   private external = false;
   private detail?: string;
+  private project?: string;
   private disposed = false;
   private stopping = false;
   private autoRestartCount = 0;
@@ -151,8 +154,15 @@ export class DshManager {
       state: this.state,
       url: this.url,
       external: this.external,
-      detail: this.detail
+      detail: this.detail,
+      project: this.project
     };
+  }
+
+  /** Record the current VS Code project and refresh UI consumers. */
+  setProject(project: string): void {
+    this.project = project;
+    this.opts.onInfo(this.info);
   }
 
   get running(): boolean {
@@ -278,10 +288,61 @@ export class DshManager {
     });
   }
 
-  /** Create a new dsh session via the running server; returns the sessionId. */
-  async createSession(): Promise<string | undefined> {
-    const value = (await this.rpc("session.create", {})) as { sessionId?: string } | undefined;
+  /** Create a new dsh session via the running server; returns the sessionId.
+   * Pass `cwd` to bind the session to a project directory (dsh workspace). */
+  async createSession(cwd?: string): Promise<string | undefined> {
+    const value = (await this.rpc("session.create", cwd === undefined ? {} : { cwd })) as { sessionId?: string } | undefined;
     return value?.sessionId;
+  }
+
+  /** Ensure a real workspace record exists for `path` (idempotent); returns its workspaceId. */
+  async ensureWorkspace(path: string): Promise<string | undefined> {
+    const value = (await this.rpc("workspace.create", { path })) as
+      | { workspace?: { workspaceId?: string }; created?: boolean }
+      | undefined;
+    if (value?.workspace?.workspaceId === undefined) {
+      this.opts.log(`ensureWorkspace: could not create/adopt workspace for ${path}`);
+      return undefined;
+    }
+    this.opts.log(`ensureWorkspace: ${path} -> ${value.workspace.workspaceId}${value.created === true ? " (created)" : " (existing)"}`);
+    return value.workspace.workspaceId;
+  }
+
+  /**
+   * Create a session bound to a real workspace for `path` (the flow the GUI
+   * groups by). Falls back to a bare cwd session when the workspace record
+   * cannot be created.
+   */
+  async createSessionInWorkspace(path: string): Promise<string | undefined> {
+    const workspaceId = await this.ensureWorkspace(path);
+    if (workspaceId !== undefined) {
+      const value = (await this.rpc("session.create", { workspaceId })) as { sessionId?: string } | undefined;
+      if (value?.sessionId !== undefined) return value.sessionId;
+    }
+    return this.createSession(path);
+  }
+
+  /** List the real workspace records (verification/diagnostics). */
+  async listWorkspaces(): Promise<Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }> | undefined> {
+    const value = (await this.rpc("workspace.list", {})) as { items?: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }> } | undefined;
+    return value?.items;
+  }
+
+  /** List all sessions with their cwd and updatedAt (to find a project's session). */
+  async listSessions(): Promise<Array<{ sessionId: string; updatedAt: number; cwd?: string; running?: boolean; blank?: boolean }> | undefined> {
+    const value = (await this.rpc("session.list", {})) as { items?: Array<{ sessionId: string; updatedAt: number; cwd?: string; running?: boolean; blank?: boolean }> } | undefined;
+    return value?.items;
+  }
+
+  /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */
+  async applyTheme(preference: "light" | "dark" | "system"): Promise<boolean> {
+    const value = await this.rpc("settings.update", { ns: "ui-theme", patch: { preference } });
+    if (value === undefined) {
+      this.opts.log(`applyTheme: could not set ui-theme.preference=${preference}`);
+      return false;
+    }
+    this.opts.log(`applyTheme: ui-theme.preference=${preference} applied`);
+    return true;
   }
 
   // ------------------------------------------------------------------ start

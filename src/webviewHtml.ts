@@ -70,7 +70,7 @@ button.secondary:hover { background: var(--vscode-button-secondaryHoverBackgroun
 }
 `;
 
-export function shellHtml(body: string): string {
+export function shellHtml(body: string, dark: boolean): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -78,7 +78,10 @@ export function shellHtml(body: string): string {
 <meta http-equiv="Content-Security-Policy" content="${CSP}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DeepSeek Harness</title>
-<style>${BASE_CSS}</style>
+<style>${BASE_CSS}
+/* Drive the nested iframe's prefers-color-scheme from the VS Code theme. */
+:root { color-scheme: ${dark ? "dark" : "light"}; }
+</style>
 </head>
 <body>
 <div id="stage">${body}</div>
@@ -118,9 +121,14 @@ export function launcherBody(info?: DshRuntimeInfo): string {
     info?.state === "running" && info.url !== undefined
       ? `<div class="status">${escapeHtml(info.url)}${info.external === true ? " (adopted)" : ""}</div>`
       : `<div class="status">${stateLabelOf(info)}</div>`;
+  const project =
+    info?.project !== undefined && info.project !== ""
+      ? `<div class="status">📁 ${escapeHtml(info.project)}</div>`
+      : "";
   return `<div class="launcher">
   <h1>DeepSeek Harness</h1>
   <button class="primary" data-cmd="new-session">打开DSH</button>
+  ${project}
   ${status}
 </div>`;
 }

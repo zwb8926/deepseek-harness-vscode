@@ -1,6 +1,6 @@
 # DSH for VS Code
 
-**项目地址：https://github.com/zwb8926/dsh-for-vscode**
+**项目地址：https://github.com/zwb8926/deepseekharness-for-vscode**
 
 在 VS Code 中使用 [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)。
 
@@ -24,7 +24,7 @@
 
 | 设置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `dsh.port` | `3080` | 内嵌服务端口。`0` = 由系统分配。若该端口已有 dsh 服务，则接管之 |
+| `dsh.port` | `0` | 内嵌服务端口。`0` = 每次启动由系统随机分配（全新浏览器 origin，GUI 自动打开最新工作区）。显式设置时若该端口已有 dsh 服务则接管之 |
 | `dsh.home` | `""` | `DSH_HOME` 覆盖。空 = 系统默认（`~/.dsh`） |
 | `dsh.cliPath` | `""` | dsh CLI 的绝对路径（`…/@deepseek-ai/dsh/lib/bin.js`）或 PATH 中的 `dsh` 命令 |
 | `dsh.autoStart` | `true` | VS Code 启动及打开聊天 UI 时自动启动（或接管）服务 |

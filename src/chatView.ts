@@ -8,6 +8,7 @@
 import * as vscode from "vscode";
 import type { DshRuntimeInfo } from "./dshManager";
 import { PanelAction, launcherBody, shellHtml } from "./webviewHtml";
+import { vscodeThemeDark } from "./chatPanel";
 
 export class LauncherViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "dsh.launcher";
@@ -45,6 +46,6 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
 
   private render(): void {
     if (this.view === undefined) return;
-    this.view.webview.html = shellHtml(launcherBody(this.lastInfo));
+    this.view.webview.html = shellHtml(launcherBody(this.lastInfo), vscodeThemeDark());
   }
 }
