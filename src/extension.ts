@@ -108,25 +108,51 @@ export function activate(context: vscode.ExtensionContext): void {
     await manager.start();
   }
 
-  async function newSession(): Promise<void> {
+  /**
+   * 打开DSH：取当前项目路径 → 查该项目的会话 → 有则打开，没有才新建。
+   * The GUI boots into the persisted selection or the most recent workspace,
+   * so the target session is chosen as the project's most recently updated.
+   */
+  async function openOrCreateSession(): Promise<void> {
     if (!manager.running) {
       await ensureStarted();
     }
     if (!manager.running) return; // start failed; the error state explains why
-    // Bind the new session to a real workspace record for the current VS
-    // Code project, so the dsh workspace list groups it under the project.
     const project = workspaceCwd();
-    const sessionId = await manager.createSessionInWorkspace(project);
-    if (sessionId === undefined) {
+
+    // 1. Adopt/create the workspace record for the project.
+    const workspaceId = await manager.ensureWorkspace(project);
+
+    // 2. Look at existing sessions bound to this project.
+    let target: string | undefined;
+    if (workspaceId !== undefined) {
+      const ws = (await manager.listWorkspaces())?.find((w) => w.workspaceId === workspaceId);
+      if (ws !== undefined && ws.sessionIds.length > 0) {
+        const summaries = (await manager.listSessions()) ?? [];
+        const candidates = summaries.filter((s) => ws.sessionIds.includes(s.sessionId) || s.cwd === project);
+        const best = [...candidates].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        target = best?.sessionId;
+      }
+    }
+
+    // 3. None exists — create one bound to the project.
+    if (target === undefined) {
+      target = await manager.createSessionInWorkspace(project);
+      log(`created session: ${target ?? "?"} (workspace: ${project})`);
+    } else {
+      log(`opening existing session: ${target} (workspace: ${project})`);
+    }
+
+    if (target === undefined) {
       void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
       return;
     }
-    log(`created session: ${sessionId} (workspace: ${project})`);
+    panel.open();
+    panel.reload();
+
     // Verification: log the real workspace records so failures are visible.
     const workspaces = await manager.listWorkspaces();
     log(`workspace.list: ${JSON.stringify(workspaces?.map((w) => ({ title: w.title, path: w.path, sessions: w.sessionIds.length })))}`);
-    panel.open();
-    panel.reload();
   }
 
   function isDarkTheme(): boolean {
@@ -144,7 +170,7 @@ export function activate(context: vscode.ExtensionContext): void {
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
       case "new-session":
-        await newSession();
+        await openOrCreateSession();
         break;
       case "open-chat":
         await openChatInEditor();

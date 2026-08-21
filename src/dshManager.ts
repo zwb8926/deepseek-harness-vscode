@@ -318,6 +318,12 @@ export class DshManager {
     return value?.items;
   }
 
+  /** List all sessions with their cwd and updatedAt (to find a project's session). */
+  async listSessions(): Promise<Array<{ sessionId: string; updatedAt: number; cwd?: string; running?: boolean; blank?: boolean }> | undefined> {
+    const value = (await this.rpc("session.list", {})) as { items?: Array<{ sessionId: string; updatedAt: number; cwd?: string; running?: boolean; blank?: boolean }> } | undefined;
+    return value?.items;
+  }
+
   /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */
   async applyTheme(preference: "light" | "dark" | "system"): Promise<boolean> {
     const value = await this.rpc("settings.update", { ns: "ui-theme", patch: { preference } });

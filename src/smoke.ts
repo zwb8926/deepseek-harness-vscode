@@ -244,6 +244,8 @@ async function main(): Promise<void> {
   });
   const escapedPath = projectDir.replace(/\\/g, "\\\\");
   check("workspace.list contains the project path", wsList.status === 200 && wsList.text.includes(escapedPath), `status=${wsList.status} body=${wsList.text.slice(0, 300)}`);
+  const sessions = await manager.listSessions();
+  check("session.list reports the project cwd", (sessions ?? []).some((s) => s.cwd === projectDir), `sessions=${JSON.stringify(sessions?.map((s) => ({ id: s.sessionId, cwd: s.cwd })))}`);
   const themeOk = await manager.applyTheme("dark");
   check("settings.update ui-theme works", themeOk === true, `applied=${themeOk}`);
 
