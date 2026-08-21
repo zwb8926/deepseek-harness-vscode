@@ -33,23 +33,6 @@
 | `dsh.extraArgs` | `[]` | 透传给 `dsh web` 的额外命令行参数 |
 | `dsh.workspaceRoot` | `""` | dsh 进程的工作目录。空 = 第一个工作区文件夹 / 用户主目录 |
 
-## 工作原理
-
-```
-VS Code 扩展宿主                        dsh 子进程
-┌────────────────────────────┐  spawn   ┌─────────────────────────────┐
-│ DshManager                 │ ───────► │ node …/dsh/lib/bin.js web   │
-│  · 定位 CLI                 │ stdout   │   --host 127.0.0.1 --port N │
-│  · 解析 "dsh web: URL"      │ ◄─────── │                             │
-│  · 健康检查                 │          └─────────────────────────────┘
-│ 编辑器内聊天面板（webview） │ iframe
-│  └─ http://127.0.0.1:PORT  │ ───────►  dsh SPA，同源：
-└────────────────────────────┘          /api RPC 与 WS 均通过
-                                        浏览器信任围栏
-```
-
-面板的 iframe 是真正的 `http://127.0.0.1:<port>` 页面，因此其所有 `/api` 请求与 WebSocket 流均为同源，能通过 dsh 的 DNS 重绑定/跨站防护围栏。扩展没有重新实现客户端协议——官方 Web UI 原样运行。
-
 ## 注意事项
 
 - **无需 node/npm**：`@deepseek-ai/dsh` 已随扩展打包（vsix 内含完整依赖树，约 200MB）。启动时优先使用 PATH 中的 `node`；机器上**没有 node、没有 npm/npx 也能启动**——扩展宿主会用 `ELECTRON_RUN_AS_NODE=1` 把自己的运行时当 node 使用

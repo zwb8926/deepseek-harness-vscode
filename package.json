@@ -38,8 +38,7 @@
       {
         "command": "dsh.openChat",
         "title": "DeepSeek Harness: Open Chat Panel",
-        "category": "DSH",
-        "icon": "$(comment-discussion)"
+        "category": "DSH"
       },
       {
         "command": "dsh.openInBrowser",
@@ -83,10 +82,7 @@
         {
           "id": "dsh",
           "title": "DeepSeek Harness",
-          "icon": {
-            "light": "media/dsh-icon-black.png",
-            "dark": "media/dsh-icon-white.png"
-          }
+          "icon": "media/dsh-icon-white.png"
         }
       ]
     },
