@@ -12,3 +12,6 @@ out/
 
 # 排除所有以 . 开头的文件夹（.vscode、.idea 等）
 .*/
+
+# stray known_hosts written by ssh with a mangled path
+D:*known_hosts*

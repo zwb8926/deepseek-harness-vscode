@@ -1,4 +1,5 @@
 .vscode/**
+.ssh/**
 src/**
 out/**/*.map
 node_modules/**

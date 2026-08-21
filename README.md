@@ -1,112 +1,57 @@
-# DeepSeek Harness for VS Code
+# DSH for VS Code
 
-Embed [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) inside VS Code.
+**项目地址：https://github.com/zwb8926/deepseek-harness-vscode**
 
-The extension **starts and manages the `dsh web` server itself** and renders the
-complete web GUI — chat, sessions, tool calls, trajectory, approvals, settings —
-in a webview panel, so you never leave the editor.
+在 VS Code 中使用 [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh)。
 
-## Features
+本扩展**自行启动并管理 `dsh web` 服务**，将完整的 Web GUI——聊天、会话、工具调用、轨迹、审批、设置——以**完整编辑器标签页**的形式打开（类似 Claude Code）：点击活动栏的 DSH（DeepSeek 鲸鱼）图标，聊天作为编辑器标签页占满编辑器区打开；左侧边栏提供**新建会话**入口与服务状态。
 
-- **Embedded server** — on first use the extension locates an existing `dsh`
-  installation (bundled `node_modules`, PATH, global npm) and, if none is found
-  and npm is available, auto-installs `@deepseek-ai/dsh` into the extension
-  storage (one-time). The `dsh web` process is spawned as a child process and
-  supervised (unexpected exit → one automatic restart when enabled).
-- **Adopt an existing server** — if a dsh web server is already listening on
-  `dsh.port` (e.g. your own `dsh web` on 3080), the extension connects to it
-  instead of starting a second process.
-- **Full chat UI in a webview** — the panel embeds the real dsh SPA (iframe,
-  same-origin), so every feature of the web GUI works: conversations, tool
-  calls, approval prompts, model selection, settings, plugins.
-- **Controls** — command palette and status bar: open chat, start / stop /
-  restart the server, reload the panel, show logs, open in your browser.
-- **Reuses your DSH_HOME** — by default the embedded server uses the same data
-  directory as your CLI (`~/.dsh`), so credentials, settings, profiles and
-  session history are shared.
+## 命令
 
-## Commands
-
-| Command | Description |
+| 命令 | 说明 |
 | --- | --- |
-| `DSH: Open Chat Panel` | Open the embedded GUI (starts the server first when `dsh.autoStart` is on) |
-| `DSH: Open in Browser` | Open the running GUI in your default browser |
-| `DSH: Start Server` | Start (or adopt) the dsh web server |
-| `DSH: Stop Server` | Stop the owned server (adopted servers are left untouched) |
-| `DSH: Restart Server` | Stop and start again |
-| `DSH: Reload Chat Panel` | Reload the iframe |
-| `DSH: Show Logs` | Open the output channel with the server log |
+| `DSH: Open Chat Panel` | 在编辑器区域以标签页形式打开嵌入式 GUI |
+| `DSH: Open in Browser` | 在默认浏览器中打开运行中的 GUI |
+| `DSH: Start Server` | 启动（或接管）dsh web 服务 |
+| `DSH: Stop Server` | 停止自有服务（接管的外部服务不受影响） |
+| `DSH: Restart Server` | 停止后重新启动 |
+| `DSH: Reload Chat Panel` | 刷新嵌入式 GUI |
+| `DSH: Show Logs` | 打开服务日志输出通道 |
 
-The status bar item shows the server state and opens the chat panel on click.
+活动栏的 **DSH** 鲸鱼图标会打开左侧边栏（**新建会话**入口 + 服务状态）并把聊天作为编辑器标签页打开；状态栏显示服务状态，点击可打开聊天。
 
-## Settings
+## 设置
 
-| Setting | Default | Description |
+| 设置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `dsh.port` | `3080` | Port for the embedded server. `0` = OS-assigned. If a dsh server already listens here, it is adopted. |
-| `dsh.home` | `""` | `DSH_HOME` override. Empty = system default (`~/.dsh`). |
-| `dsh.cliPath` | `""` | Absolute path to the dsh CLI (`…/@deepseek-ai/dsh/lib/bin.js`) or a `dsh` command on PATH. |
-| `dsh.autoStart` | `true` | Start/adopt the server when the chat panel is opened. |
-| `dsh.autoRestart` | `true` | Restart once after an unexpected exit. |
-| `dsh.autoInstall` | `true` | Auto-install `@deepseek-ai/dsh` into the extension storage if not found. |
-| `dsh.extraArgs` | `[]` | Extra arguments forwarded to `dsh web`. |
-| `dsh.workspaceRoot` | `""` | Working directory of the dsh process. Empty = first workspace folder / home. |
+| `dsh.port` | `3080` | 内嵌服务端口。`0` = 由系统分配。若该端口已有 dsh 服务，则接管之 |
+| `dsh.home` | `""` | `DSH_HOME` 覆盖。空 = 系统默认（`~/.dsh`） |
+| `dsh.cliPath` | `""` | dsh CLI 的绝对路径（`…/@deepseek-ai/dsh/lib/bin.js`）或 PATH 中的 `dsh` 命令 |
+| `dsh.autoStart` | `true` | VS Code 启动及打开聊天 UI 时自动启动（或接管）服务 |
+| `dsh.autoRestart` | `true` | 意外退出后自动重启一次（有连续次数上限） |
+| `dsh.autoInstall` | `true` | 未找到 dsh 时自动安装 `@deepseek-ai/dsh` 到扩展存储目录 |
+| `dsh.extraArgs` | `[]` | 透传给 `dsh web` 的额外命令行参数 |
+| `dsh.workspaceRoot` | `""` | dsh 进程的工作目录。空 = 第一个工作区文件夹 / 用户主目录 |
 
-## How it works
+## 工作原理
 
 ```
-VS Code extension host                     dsh child process
-┌────────────────────────────┐  spawn      ┌─────────────────────────────┐
-│ DshManager                 │ ──────────► │ node …/dsh/lib/bin.js web   │
-│  · resolve CLI             │  stdout     │   --host 127.0.0.1 --port N │
-│  · parse "dsh web: URL"    │ ◄────────── │                             │
-│  · health check            │             └─────────────────────────────┘
-│ ChatPanel (webview)        │   iframe
-│  └─ http://127.0.0.1:PORT  │ ──────────►  the dsh SPA, same-origin:
-└────────────────────────────┘             /api RPC + WS pass the
-                                            browser-trust fence
+VS Code 扩展宿主                        dsh 子进程
+┌────────────────────────────┐  spawn   ┌─────────────────────────────┐
+│ DshManager                 │ ───────► │ node …/dsh/lib/bin.js web   │
+│  · 定位 CLI                 │ stdout   │   --host 127.0.0.1 --port N │
+│  · 解析 "dsh web: URL"      │ ◄─────── │                             │
+│  · 健康检查                 │          └─────────────────────────────┘
+│ 编辑器内聊天面板（webview） │ iframe
+│  └─ http://127.0.0.1:PORT  │ ───────►  dsh SPA，同源：
+└────────────────────────────┘          /api RPC 与 WS 均通过
+                                        浏览器信任围栏
 ```
 
-The panel's iframe is a genuine `http://127.0.0.1:<port>` page, so all of its
-`/api` requests and WebSocket streams are same-origin and pass the dsh
-DNS-rebinding/cross-site fence. The extension never re-implements the client
-protocol — the entire official web UI runs as-is.
+面板的 iframe 是真正的 `http://127.0.0.1:<port>` 页面，因此其所有 `/api` 请求与 WebSocket 流均为同源，能通过 dsh 的 DNS 重绑定/跨站防护围栏。扩展没有重新实现客户端协议——官方 Web UI 原样运行。
 
-## Development
+## 注意事项
 
-```bash
-npm install            # dev deps: typescript, @types/vscode, vsce
-npm run compile        # tsc → out/
-```
-
-Run the extension:
-
-- **F5** in VS Code (uses `.vscode/launch.json`, Extension Development Host), or
-  ```bash
-  code --extensionDevelopmentPath=D:\dswork\dsh\deepseek-harness-vscode
-  ```
-
-Headless smoke test (exercises the full spawn → URL → HTTP wire → stop
-pipeline without VS Code):
-
-```bash
-npm run smoke
-# or point it at an existing dsh install:
-node out/smoke.js --cli "C:\path\to\node_modules\@deepseek-ai\dsh\lib\bin.js"
-```
-
-Package:
-
-```bash
-npm run package        # produces deepseek-harness-vscode-0.1.0.vsix
-```
-
-## Notes & limitations
-
-- The embedded server binds `127.0.0.1` only (the safe default; `--host 0.0.0.0`
-  is intentionally rejected by dsh).
-- Running the embedded server alongside your own `dsh web` on the same
-  `DSH_HOME` shares the same data directory. Use a separate `dsh.home` if you
-  want isolated instances.
-- v1 embeds the GUI through an iframe; if a future VS Code version restricts
-  webview iframes, use `DSH: Open in Browser` as the fallback.
+- 内嵌服务仅绑定 `127.0.0.1`（安全默认；dsh 有意拒绝 `--host 0.0.0.0`）
+- 内嵌服务与你自己运行的 `dsh web` 共用同一 `DSH_HOME` 时会共享数据目录；如需隔离实例请设置独立的 `dsh.home`
+- v1 通过 iframe 嵌入 GUI；若未来 VS Code 版本限制 webview iframe，可使用 `DSH: Open in Browser` 作为兜底

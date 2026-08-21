@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { ChatPanel, PanelAction } from "./chatPanel";
+import { LauncherViewProvider } from "./chatView";
 import { DshManager, DshRuntimeInfo } from "./dshManager";
 
 function getCfg<T>(key: string, fallback: T): T {
@@ -40,13 +41,35 @@ export function activate(context: vscode.ExtensionContext): void {
     onInfo: (info) => {
       renderStatus(info);
       panel.update(info);
+      launcher.update(info);
     },
     log
   });
 
-  const panel = new ChatPanel((action: PanelAction) => {
+  const panel = new ChatPanel(
+    (action: PanelAction) => {
+      void handlePanelAction(action);
+    },
+    context.extensionUri
+  );
+
+  // Activity-bar whale icon → sidebar panel with session controls; the chat
+  // itself always opens as a full editor tab.
+  const launcher = new LauncherViewProvider((action: PanelAction) => {
     void handlePanelAction(action);
   });
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcher, {
+      webviewOptions: { retainContextWhenHidden: true }
+    })
+  );
+
+  async function openChatInEditor(): Promise<void> {
+    panel.open();
+    if (getCfg("autoStart", true) && !manager.running) {
+      await ensureStarted();
+    }
+  }
 
   function workspaceCwd(): string {
     const configuredRoot = getCfg("workspaceRoot", "");
@@ -70,8 +93,29 @@ export function activate(context: vscode.ExtensionContext): void {
     await manager.start();
   }
 
+  async function newSession(): Promise<void> {
+    if (!manager.running) {
+      await ensureStarted();
+    }
+    if (!manager.running) return; // start failed; the error state explains why
+    const sessionId = await manager.createSession();
+    if (sessionId === undefined) {
+      void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
+      return;
+    }
+    log(`created session: ${sessionId}`);
+    panel.open();
+    panel.reload();
+  }
+
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
+      case "new-session":
+        await newSession();
+        break;
+      case "open-chat":
+        await openChatInEditor();
+        break;
       case "start":
         await ensureStarted();
         break;
@@ -85,6 +129,7 @@ export function activate(context: vscode.ExtensionContext): void {
         break;
       case "reload":
         panel.reload();
+        launcher.reload();
         break;
       case "open-browser":
         await openInBrowser();
@@ -148,12 +193,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // ---------------------------------------------------------------- commands
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("dsh.openChat", async () => {
-      panel.open();
-      if (getCfg("autoStart", true) && !manager.running) {
-        await ensureStarted();
-      }
-    }),
+    vscode.commands.registerCommand("dsh.openChat", () => openChatInEditor()),
     vscode.commands.registerCommand("dsh.openInBrowser", () => openInBrowser()),
     vscode.commands.registerCommand("dsh.start", () => ensureStarted()),
     vscode.commands.registerCommand("dsh.stop", () => manager.stop()),
@@ -172,6 +212,11 @@ export function activate(context: vscode.ExtensionContext): void {
       log("settings changed — new values apply on the next start (port/home/args)");
     })
   );
+
+  // Auto-start after startup when enabled, so the UI is live right away.
+  if (getCfg("autoStart", true)) {
+    void ensureStarted().catch((err) => log(`auto-start failed: ${String(err)}`));
+  }
 
   context.subscriptions.push({
     dispose: () => {

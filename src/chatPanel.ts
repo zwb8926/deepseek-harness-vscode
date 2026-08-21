@@ -1,127 +1,40 @@
 /**
- * ChatPanel — the VS Code webview that embeds the dsh web GUI.
- *
- * The panel itself is a thin shell. Its content is one of:
- *  - a placeholder while the server is locating/installing/starting,
- *  - a full-size iframe pointing at the running dsh web server
- *    (same-origin inside the iframe, so the browser-trust fence passes),
- *  - an error/stopped page with action buttons.
- *
- * The shell carries a tiny inline script that forwards button clicks to the
- * extension host via acquireVsCodeApi(). All real UI comes from the dsh SPA.
+ * ChatPanel — the VS Code editor-area webview that embeds the dsh web GUI.
+ * The shared shell HTML lives in webviewHtml.ts; this class only owns the
+ * WebviewPanel lifecycle.
  */
 
 import * as vscode from "vscode";
 import type { DshRuntimeInfo } from "./dshManager";
+import { PanelAction, shellHtml, stateBody } from "./webviewHtml";
 
-export interface PanelAction {
-  type: "open-browser" | "start" | "stop" | "restart" | "reload" | "show-logs";
-}
-
-const CSP = [
-  "default-src 'none'",
-  "style-src 'unsafe-inline'",
-  "script-src 'unsafe-inline'",
-  "frame-src http://127.0.0.1:* http://localhost:*",
-  "img-src data: https:",
-  "connect-src 'none'",
-  "font-src 'none'",
-  "base-uri 'none'"
-].join("; ");
-
-const BASE_CSS = `
-:root { color-scheme: light dark; }
-html, body { margin: 0; padding: 0; height: 100%; }
-body {
-  font-family: var(--vscode-font-family, system-ui);
-  color: var(--vscode-foreground);
-  background: var(--vscode-editor-background);
-  display: flex; flex-direction: column;
-}
-#stage { flex: 1; display: flex; flex-direction: column; }
-#stage iframe { width: 100%; height: 100%; border: 0; flex: 1; background: #fff; }
-.placeholder {
-  flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 14px; text-align: center; padding: 32px;
-}
-.spinner {
-  width: 34px; height: 34px; border-radius: 50%;
-  border: 3px solid var(--vscode-progressBar-background, #0e639c);
-  border-top-color: transparent;
-  animation: spin 0.9s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-h1 { font-size: 16px; font-weight: 600; margin: 0; }
-p { margin: 0; color: var(--vscode-descriptionForeground); font-size: 13px; max-width: 560px; line-height: 1.5; }
-code { font-family: var(--vscode-editor-font-family, monospace); font-size: 12px;
-  background: var(--vscode-textCodeBlock-background); padding: 2px 6px; border-radius: 4px; }
-.actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; justify-content: center; }
-button {
-  border: 1px solid var(--vscode-button-border, transparent);
-  background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
-}
-button:hover { background: var(--vscode-button-hoverBackground); }
-button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-`;
-
-function shellHtml(body: string): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="${CSP}">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DeepSeek Harness</title>
-<style>${BASE_CSS}</style>
-</head>
-<body>
-<div id="stage">${body}</div>
-<script>
-(function () {
-  const vscode = acquireVsCodeApi();
-  document.querySelectorAll("button[data-cmd]").forEach(function (b) {
-    b.addEventListener("click", function () {
-      vscode.postMessage({ type: b.getAttribute("data-cmd") });
-    });
-  });
-})();
-</script>
-</body>
-</html>`;
-}
-
-function actionsHtml(actions: Array<[string, string]>): string {
-  const buttons = actions
-    .map(([cmd, label]) => `<button data-cmd="${cmd}">${label}</button>`)
-    .join("");
-  return `<div class="actions">${buttons}</div>`;
-}
-
-function placeholderHtml(title: string, detail: string): string {
-  return `<div class="placeholder">
-  <div class="spinner"></div>
-  <h1>${title}</h1>
-  <p>${detail}</p>
-  <p><code>DeepSeek Harness</code> logs keep the full startup trace.</p>
-</div>`;
-}
+export { PanelAction };
 
 export class ChatPanel {
   private static readonly viewType = "dsh.chatPanel";
   private panel?: vscode.WebviewPanel;
   private lastInfo?: DshRuntimeInfo;
 
-  constructor(private readonly onAction: (action: PanelAction) => void) {}
+  constructor(
+    private readonly onAction: (action: PanelAction) => void,
+    private readonly extensionUri: vscode.Uri
+  ) {}
 
   open(): void {
     if (this.panel === undefined) {
-      this.panel = vscode.window.createWebviewPanel(ChatPanel.viewType, "DeepSeek Harness", vscode.ViewColumn.One, {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: []
-      });
+      this.panel = vscode.window.createWebviewPanel(
+        ChatPanel.viewType,
+        "DeepSeek Harness",
+        // Full-width editor tab (like a file tab, Claude-style): opens in the
+        // active editor group without splitting.
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          localResourceRoots: []
+        }
+      );
+      this.panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon.png");
       const disposables: vscode.Disposable[] = [];
       this.panel.onDidDispose(
         () => {
@@ -158,50 +71,6 @@ export class ChatPanel {
 
   private render(): void {
     if (this.panel === undefined) return;
-    const info = this.lastInfo;
-    let body: string;
-    switch (info?.state) {
-      case "running": {
-        const url = info.url ?? "";
-        body = `<iframe title="DeepSeek Harness" src="${escapeHtml(url)}"
-          sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"
-          allow="clipboard-read; clipboard-write"></iframe>`;
-        break;
-      }
-      case "locating":
-        body = placeholderHtml("Locating the dsh CLI…", "The extension is looking for an existing dsh installation (bundled, PATH, global npm).");
-        break;
-      case "installing":
-        body = placeholderHtml("Installing DeepSeek Harness…", "npm install @deepseek-ai/dsh into the extension storage is running (one-time, about 200&thinsp;MB). The chat panel appears automatically when the server is up.");
-        break;
-      case "starting":
-        body = placeholderHtml("Starting DeepSeek Harness…", "The dsh web server is booting. This can take a few seconds on first launch.");
-        break;
-      case "error":
-        body = `<div class="placeholder">
-          <h1>DeepSeek Harness failed to start</h1>
-          <p>${escapeHtml(info.detail ?? "Unknown error")}</p>
-          <p>See the <code>DeepSeek Harness</code> output channel for the full startup log.</p>
-          ${actionsHtml([["start", "Retry"], ["open-browser", "Open in Browser"], ["show-logs", "Show Logs"]])}
-        </div>`;
-        break;
-      case "stopped":
-      default:
-        body = `<div class="placeholder">
-          <h1>DeepSeek Harness is not running</h1>
-          <p>The dsh web server is stopped. Start it to open the chat panel, or open the running GUI in your browser.</p>
-          ${actionsHtml([["start", "Start Server"], ["open-browser", "Open in Browser"], ["show-logs", "Show Logs"]])}
-        </div>`;
-        break;
-    }
-    this.panel.webview.html = shellHtml(body);
+    this.panel.webview.html = shellHtml(stateBody(this.lastInfo));
   }
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
