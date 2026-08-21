@@ -1,6 +1,6 @@
 {
   "name": "deepseekharness-for-vscode",
-  "displayName": "deepseekharness for vscode",
+  "displayName": "DeepSeekHarness for VS Code",
   "description": "DeepSeek Harness inside VS Code: auto-starts the dsh web server and opens the full chat/session/tool/approval UI as an editor tab (Claude-style), with start/stop control, status bar, and open-in-browser.",
   "version": "1.2.0",
   "publisher": "zwb8926",
