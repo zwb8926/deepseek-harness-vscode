@@ -151,8 +151,11 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package --no-dependencies",
+    "package": "vsce package --out DSH-for-VS-Code.vsix",
     "smoke": "npm run compile && node out/smoke.js"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "^0.1.0-rc.7"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

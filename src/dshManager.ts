@@ -59,6 +59,10 @@ export interface DshOptions {
   autoInstallDir?: string;
   /** Restart once after an unexpected exit. */
   autoRestart?: boolean;
+  /** Test hook: force this executable as the node runtime. */
+  nodeExecOverride?: string;
+  /** Test hook: treat nodeExecOverride as an Electron binary (ELECTRON_RUN_AS_NODE). */
+  electronNode?: boolean;
   /** Called on every state transition. */
   onInfo: (info: DshRuntimeInfo) => void;
   /** Log sink. */
@@ -270,8 +274,8 @@ export class DshManager {
 
     // 3. Spawn `dsh web`.
     this.setState("starting");
-    const args = ["web", "--host", "127.0.0.1", "--port", String(this.opts.port), ...(this.opts.extraArgs ?? [])];
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const args = ["web", "--host", "127.0.0.1", "--port", String(this.opts.port), "--no-open", ...(this.opts.extraArgs ?? [])];
+    const env: NodeJS.ProcessEnv = { ...process.env, ...(cli.env ?? {}) };
     if (this.opts.home !== undefined && this.opts.home !== "") env.DSH_HOME = this.opts.home;
     this.opts.log(`spawn: ${cli.cmd} ${args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`);
     if (cli.cwd !== undefined) {
@@ -444,7 +448,7 @@ export class DshManager {
 
   // ------------------------------------------------------------- CLI resolve
 
-  private async resolveCli(): Promise<{ cmd: string; prefixArgs: string[]; shell?: boolean; cwd?: string } | undefined> {
+  private async resolveCli(): Promise<{ cmd: string; prefixArgs: string[]; shell?: boolean; cwd?: string; env?: NodeJS.ProcessEnv } | undefined> {
     const opts = this.opts;
 
     // 1. Explicit setting.
@@ -483,7 +487,7 @@ export class DshManager {
     return undefined;
   }
 
-  private async locateInTree(rootDir: string): Promise<{ cmd: string; prefixArgs: string[] } | undefined> {
+  private async locateInTree(rootDir: string): Promise<{ cmd: string; prefixArgs: string[]; env?: NodeJS.ProcessEnv } | undefined> {
     let bin: string | undefined;
     try {
       const require = createRequire(path.join(rootDir, "noop.js"));
@@ -497,26 +501,26 @@ export class DshManager {
       if (existsSync(direct)) bin = direct;
     }
     if (bin === undefined || !existsSync(bin)) return undefined;
-    const node = await resolveNodeExec();
+    const node = await resolveNodeExec(this.opts);
     if (node === undefined) {
-      this.opts.log("resolve: dsh found, but no node executable is available to run it");
+      this.opts.log("resolve: dsh found, but no node runtime is available to run it");
       return undefined;
     }
-    this.opts.log(`resolve: using dsh at ${bin} (node: ${node})`);
-    return { cmd: node, prefixArgs: [bin] };
+    this.opts.log(`resolve: using dsh at ${bin} (node: ${node.cmd}${node.electron === true ? " via ELECTRON_RUN_AS_NODE" : ""})`);
+    return { cmd: node.cmd, prefixArgs: [bin], env: node.electron === true ? { ELECTRON_RUN_AS_NODE: "1" } : undefined };
   }
 
-  private async resolveExplicit(explicit: string): Promise<{ cmd: string; prefixArgs: string[]; shell?: boolean } | undefined> {
+  private async resolveExplicit(explicit: string): Promise<{ cmd: string; prefixArgs: string[]; shell?: boolean; env?: NodeJS.ProcessEnv } | undefined> {
     // A path to bin.js / an absolute path.
     if (path.isAbsolute(explicit) || explicit.endsWith(".js")) {
       const candidate = path.isAbsolute(explicit) ? explicit : path.resolve(explicit);
       if (!existsSync(candidate)) return undefined;
-      const node = await resolveNodeExec();
+      const node = await resolveNodeExec(this.opts);
       if (node === undefined) {
-        this.opts.log("resolve: no node executable available to run the CLI");
+        this.opts.log("resolve: no node runtime available to run the CLI");
         return undefined;
       }
-      return { cmd: node, prefixArgs: [candidate] };
+      return { cmd: node.cmd, prefixArgs: [candidate], env: node.electron === true ? { ELECTRON_RUN_AS_NODE: "1" } : undefined };
     }
     // Otherwise treat it as a command on PATH.
     const onPath = await findOnPath(explicit);
@@ -577,19 +581,26 @@ export async function findOnPath(name: string): Promise<string | undefined> {
 }
 
 /**
- * Resolve a node executable able to run a JS file.
- * Prefers `node` on PATH; falls back to process.execPath only when the
- * extension host really runs under node (plain-node contexts such as the
- * smoke test). In the VS Code extension host process.execPath is the Code
- * binary and must never be used.
+ * Resolve a node runtime able to run a JS file.
+ *
+ * Order: explicit test override → `node` on PATH → plain-node context
+ * (process.execPath IS node) → the extension-host binary itself with
+ * ELECTRON_RUN_AS_NODE=1 (VS Code's own trick: its Electron exe behaves as
+ * plain Node with that env var, so a machine with neither node nor npm can
+ * still run the bundled dsh).
  */
-async function resolveNodeExec(): Promise<string | undefined> {
+async function resolveNodeExec(opts: DshOptions): Promise<{ cmd: string; electron: boolean } | undefined> {
+  if (opts.nodeExecOverride !== undefined) {
+    return { cmd: opts.nodeExecOverride, electron: opts.electronNode === true };
+  }
   const onPath = await findOnPath("node");
-  if (onPath !== undefined) return onPath;
+  if (onPath !== undefined) return { cmd: onPath, electron: false };
   const self = process.execPath;
   const base = path.basename(self).toLowerCase();
-  if (base === "node" || base === "node.exe") return self;
-  return undefined;
+  if (base === "node" || base === "node.exe") return { cmd: self, electron: false };
+  // Anything else is (almost certainly) the Electron-based extension host:
+  // reuse it as Node.
+  return { cmd: self, electron: true };
 }
 
 async function npmGlobalRoot(): Promise<string | undefined> {

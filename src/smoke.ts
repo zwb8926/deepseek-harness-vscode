@@ -23,6 +23,7 @@ interface Cli {
   cliPath?: string;
   home?: string;
   port: number;
+  electron?: string;
 }
 
 function parseArgs(argv: string[]): Cli {
@@ -31,6 +32,7 @@ function parseArgs(argv: string[]): Cli {
     if (argv[i] === "--cli" && argv[i + 1] !== undefined) cli.cliPath = argv[++i];
     else if (argv[i] === "--home" && argv[i + 1] !== undefined) cli.home = argv[++i];
     else if (argv[i] === "--port" && argv[i + 1] !== undefined) cli.port = Number(argv[++i]);
+    else if (argv[i] === "--electron" && argv[i + 1] !== undefined) cli.electron = argv[++i];
   }
   return cli;
 }
@@ -113,6 +115,28 @@ async function scenarioAdopt(cliPath: string | undefined): Promise<void> {
   check("original server stopped cleanly", first.info.state === "stopped", `state=${first.info.state}`);
 }
 
+/** Third scenario: run through the ELECTRON_RUN_AS_NODE fallback (no node on PATH). */
+async function scenarioElectronNode(cliPath: string | undefined, electron: string): Promise<void> {
+  console.log("— electron fallback —");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
+  const manager = new DshManager({
+    port: 0,
+    home,
+    cliPath,
+    nodeExecOverride: electron,
+    electronNode: true,
+    autoInstall: false,
+    autoRestart: false,
+    cwd: home,
+    onInfo: (info) => console.log(`  [state] ${JSON.stringify(info)}`),
+    log: (line) => console.log(`  [dsh] ${line}`)
+  });
+  await manager.start();
+  check("electron-node spawn reached running", manager.info.state === "running" && manager.info.url !== undefined, `state=${manager.info.state} detail=${manager.info.detail ?? ""}`);
+  await manager.stop();
+  check("electron-node server stopped", manager.info.state === "stopped", `state=${manager.info.state}`);
+}
+
 async function main(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
   const home = cli.home ?? fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
@@ -175,6 +199,10 @@ async function main(): Promise<void> {
   check("stopped state", manager.info.state === "stopped", `state=${manager.info.state}`);
 
   await scenarioAdopt(cli.cliPath);
+
+  if (cli.electron !== undefined) {
+    await scenarioElectronNode(cli.cliPath, cli.electron);
+  }
 
   console.log(failures === 0 ? "SMOKE PASSED" : `SMOKE FAILED (${failures} assertion${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);
