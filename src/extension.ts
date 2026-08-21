@@ -215,7 +215,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Auto-start after startup when enabled, so the UI is live right away.
   if (getCfg("autoStart", true)) {
-    void ensureStarted().catch((err) => log(`auto-start failed: ${String(err)}`));
+    void ensureStarted()
+      .catch((err) => {
+        log(`auto-start failed: ${String(err)}`);
+        void vscode.window.showErrorMessage(`DeepSeek Harness 自动启动失败：${String(err)}`);
+      })
+      .then(() => {
+        log(`auto-start settled: ${manager.info.state}${manager.info.url !== undefined ? " @ " + manager.info.url : ""}`);
+      });
   }
 
   context.subscriptions.push({

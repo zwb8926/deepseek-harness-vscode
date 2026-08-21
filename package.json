@@ -23,6 +23,7 @@
   ],
   "activationEvents": [
     "onStartupFinished",
+    "onView:dsh.launcher",
     "onCommand:dsh.openChat",
     "onCommand:dsh.openInBrowser",
     "onCommand:dsh.start",
