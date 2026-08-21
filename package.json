@@ -103,10 +103,10 @@
       "properties": {
         "dsh.port": {
           "type": "number",
-          "default": 3080,
+          "default": 0,
           "minimum": 0,
           "maximum": 65535,
-          "markdownDescription": "Port for the embedded dsh web server. `0` lets the OS pick a free port. If a dsh server is already listening on this port, the extension adopts it instead of starting a new process."
+          "markdownDescription": "内嵌 dsh 服务端口。**默认 `0` = 每次启动由系统随机分配**：全新端口 = 全新浏览器 origin，GUI 不会继承浏览器里持久化的旧会话选中，启动时自动打开最新工作区（当前项目）。如果你显式设置了端口（如 3080），且该端口已有 dsh 服务，扩展会接管它（注意：固定端口会复用浏览器 localStorage 的会话选中，可能不会自动切到当前项目工作区）。"
         },
         "dsh.home": {
           "type": "string",

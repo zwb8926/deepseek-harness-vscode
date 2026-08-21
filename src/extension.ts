@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const autoInstallDir = path.join(context.globalStorageUri.fsPath, "dsh-cli");
 
   const manager = new DshManager({
-    port: getCfg("port", 3080),
+    port: getCfg("port", 0),
     home: getCfg("home", ""),
     cliPath: getCfg("cliPath", ""),
     cwd: workspaceCwd(),
@@ -98,7 +98,7 @@ export function activate(context: vscode.ExtensionContext): void {
   /** Refresh spawn-relevant options from settings before a start. */
   function syncOptions(): void {
     manager.configure({
-      port: getCfg("port", 3080),
+      port: getCfg("port", 0),
       home: getCfg("home", ""),
       cliPath: getCfg("cliPath", ""),
       extraArgs: getCfg("extraArgs", []),
