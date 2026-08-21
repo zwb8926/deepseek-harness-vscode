@@ -723,11 +723,11 @@ export async function findOnPath(name: string): Promise<string | undefined> {
 /**
  * Resolve a node runtime able to run a JS file.
  *
- * Order: explicit test override → `node` on PATH → plain-node context
- * (process.execPath IS node) → the extension-host binary itself with
- * ELECTRON_RUN_AS_NODE=1 (VS Code's own trick: its Electron exe behaves as
- * plain Node with that env var, so a machine with neither node nor npm can
- * still run the bundled dsh).
+ * Order: explicit test override → `node` on PATH → the bundled portable
+ * node.exe (shipped inside the vsix, same ABI as the bundled native modules,
+ * so machines with NO node/npm at all still work) → the extension-host
+ * binary itself with ELECTRON_RUN_AS_NODE=1 (last resort; its Electron node
+ * ABI may not match bundled native modules like keytar).
  */
 async function resolveNodeExec(opts: DshOptions): Promise<{ cmd: string; electron: boolean } | undefined> {
   if (opts.nodeExecOverride !== undefined) {
@@ -735,6 +735,9 @@ async function resolveNodeExec(opts: DshOptions): Promise<{ cmd: string; electro
   }
   const onPath = await findOnPath("node");
   if (onPath !== undefined) return { cmd: onPath, electron: false };
+  // Bundled portable node (vsix-shipped), ABI-matched to the bundled deps.
+  const bundledNode = path.join(__dirname, "..", "vendor", "node", "node.exe");
+  if (existsSync(bundledNode)) return { cmd: bundledNode, electron: false };
   const self = process.execPath;
   const base = path.basename(self).toLowerCase();
   if (base === "node" || base === "node.exe") return { cmd: self, electron: false };

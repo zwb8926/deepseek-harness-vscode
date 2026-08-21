@@ -7,6 +7,9 @@ out/
 # packaged extension
 *.vsix
 
+# bundled portable node runtime (shipped in the vsix, not committed)
+vendor/
+
 # logs
 *.log
 
