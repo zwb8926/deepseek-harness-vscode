@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# build output
+out/
+
+# packaged extension
+*.vsix
+
+# logs
+*.log
+
+# 排除所有以 . 开头的文件夹（.vscode、.idea 等）
+.*/

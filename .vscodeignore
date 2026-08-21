@@ -1,0 +1,9 @@
+.vscode/**
+src/**
+out/**/*.map
+node_modules/**
+**/*.ts
+tsconfig.json
+.vscodeignore
+.gitignore
+smoke-notes.md

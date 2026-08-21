@@ -1,0 +1,178 @@
+/**
+ * Headless smoke test for the DshManager pipeline — no VS Code needed.
+ *
+ *   node out/smoke.js [--cli <path-to-bin.js>] [--home <DSH_HOME>] [--port N]
+ *
+ * Exercises exactly what the extension does at runtime:
+ *   1. resolve the CLI, spawn `dsh web --host 127.0.0.1 --port <port>`,
+ *   2. parse the printed URL line (port 0 = OS-assigned),
+ *   3. health-check the root document (200 + __DSH_BOOT__),
+ *   4. verify the /api wire (trust fence passes, RPC envelope errors),
+ *   5. stop the server and confirm the process exits.
+ *
+ * Exits 0 on success, 1 on any failed assertion.
+ */
+
+import * as fs from "node:fs";
+import * as http from "node:http";
+import * as os from "node:os";
+import * as path from "node:path";
+import { DshManager } from "./dshManager";
+
+interface Cli {
+  cliPath?: string;
+  home?: string;
+  port: number;
+}
+
+function parseArgs(argv: string[]): Cli {
+  const cli: Cli = { port: 0 };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--cli" && argv[i + 1] !== undefined) cli.cliPath = argv[++i];
+    else if (argv[i] === "--home" && argv[i + 1] !== undefined) cli.home = argv[++i];
+    else if (argv[i] === "--port" && argv[i + 1] !== undefined) cli.port = Number(argv[++i]);
+  }
+  return cli;
+}
+
+function httpJson(method: string, url: string, body?: unknown): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = http.request(
+      {
+        method,
+        hostname: u.hostname,
+        port: u.port,
+        path: u.pathname + u.search,
+        headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+        timeout: 10_000
+      },
+      (res) => {
+        let text = "";
+        res.on("data", (chunk: Buffer) => (text += chunk.toString("utf8")));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text }));
+      }
+    );
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    if (body !== undefined) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+let failures = 0;
+function check(name: string, cond: boolean, detail?: string): void {
+  if (cond) {
+    console.log(`  ok   ${name}`);
+  } else {
+    failures++;
+    console.error(`  FAIL ${name}${detail !== undefined ? ` — ${detail}` : ""}`);
+  }
+}
+
+/** Second scenario: a second manager must adopt a running server, not spawn. */
+async function scenarioAdopt(cliPath: string | undefined): Promise<void> {
+  console.log("— adopt —");
+  const homeA = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
+  const homeB = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
+  const first = new DshManager({
+    port: 0,
+    home: homeA,
+    cliPath,
+    autoInstall: false,
+    autoRestart: false,
+    cwd: homeA,
+    onInfo: () => {},
+    log: () => {}
+  });
+  await first.start();
+  const url = first.info.url;
+  check("scenario A server running", first.info.state === "running" && url !== undefined, `state=${first.info.state}`);
+  if (url === undefined) {
+    await first.stop();
+    return;
+  }
+  const port = Number(new URL(url).port);
+
+  const second = new DshManager({
+    port,
+    home: homeB,
+    autoInstall: false,
+    autoRestart: false,
+    cwd: homeB,
+    onInfo: () => {},
+    log: () => {}
+  });
+  await second.start();
+  check("second manager adopts the running server", second.info.state === "running" && second.info.external === true, `state=${second.info.state} external=${second.info.external}`);
+
+  await second.stop();
+  check("stopping the adopter leaves the server alive", first.info.state === "running", `first state=${first.info.state}`);
+
+  await first.stop();
+  check("original server stopped cleanly", first.info.state === "stopped", `state=${first.info.state}`);
+}
+
+async function main(): Promise<void> {
+  const cli = parseArgs(process.argv.slice(2));
+  const home = cli.home ?? fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
+  console.log(`smoke: DSH_HOME=${home} port=${cli.port} cli=${cli.cliPath ?? "(auto)"}`);
+
+  const manager = new DshManager({
+    port: cli.port,
+    home,
+    cliPath: cli.cliPath,
+    autoInstall: false,
+    autoRestart: false,
+    cwd: home,
+    onInfo: (info) => console.log(`  [state] ${JSON.stringify(info)}`),
+    log: (line) => console.log(`  [dsh] ${line}`)
+  });
+
+  console.log("— start —");
+  await manager.start();
+
+  const url = manager.info.url;
+  check("manager reached running state", manager.info.state === "running", `state=${manager.info.state} detail=${manager.info.detail ?? ""}`);
+  check("url resolved", url !== undefined, `url=${url ?? "none"}`);
+  if (url === undefined) {
+    await manager.stop();
+    process.exit(1);
+  }
+
+  console.log("— wire —");
+  const root = await httpJson("GET", url + "/");
+  check("GET / → 200", root.status === 200, `status=${root.status}`);
+  check("index.html carries __DSH_BOOT__", root.text.includes("__DSH_BOOT__"), "boot manifest missing");
+  check("index.html is the DSH SPA", root.text.includes("DeepSeek Harness"));
+
+  // The trust fence must PASS for a loopback Host with no Origin (extension-host style).
+  const envelope = { type: "client-request", rpcId: "smoke-1", method: "llm.providers", payload: {} };
+  const rpc = await httpJson("POST", url + "/api/llm.providers", envelope);
+  check("POST /api/llm.providers is not 403 (trust fence passed)", rpc.status !== 403, `status=${rpc.status}`);
+  check("POST /api/llm.providers answers an RPC envelope", rpc.status === 200 && rpc.text.includes("server-response"), `status=${rpc.status} body=${rpc.text.slice(0, 120)}`);
+  check("llm.providers succeeds", rpc.status === 200 && rpc.text.includes('"ok":true'), `body=${rpc.text.slice(0, 200)}`);
+
+  const badBody = await httpJson("POST", url + "/api/llm.providers", { not: "an envelope" });
+  check("malformed envelope → schema error envelope", badBody.status === 200 && badBody.text.includes("invalid client-request message"), `status=${badBody.status} body=${badBody.text.slice(0, 120)}`);
+
+  const unknown = await httpJson("POST", url + "/api/__smoke_nope__", envelope);
+  check("unknown endpoint → 404", unknown.status === 404, `status=${unknown.status}`);
+
+  const get = await httpJson("GET", url + "/api/llm.providers");
+  check("GET /api/<endpoint> → 404/426 (not 403)", get.status !== 403, `status=${get.status}`);
+
+  console.log("— stop —");
+  await manager.stop();
+  check("stopped state", manager.info.state === "stopped", `state=${manager.info.state}`);
+
+  await scenarioAdopt(cli.cliPath);
+
+  console.log(failures === 0 ? "SMOKE PASSED" : `SMOKE FAILED (${failures} assertion${failures === 1 ? "" : "s"})`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+main().catch((err) => {
+  console.error("smoke crashed:", err);
+  process.exit(1);
+});

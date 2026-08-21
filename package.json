@@ -1,0 +1,142 @@
+{
+  "name": "deepseek-harness-vscode",
+  "displayName": "DeepSeek Harness",
+  "description": "Embed DeepSeek Harness inside VS Code: auto-starts the dsh web server and renders the full chat/session/tool/approval UI in a webview panel, with start/stop/restart control, status bar, and open-in-browser.",
+  "version": "0.1.0",
+  "publisher": "dsh-community",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Chat",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "agent",
+    "chat"
+  ],
+  "activationEvents": [
+    "onCommand:dsh.openChat",
+    "onCommand:dsh.openInBrowser",
+    "onCommand:dsh.start",
+    "onCommand:dsh.stop",
+    "onCommand:dsh.restart",
+    "onCommand:dsh.reloadPanel",
+    "onCommand:dsh.showLogs"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dsh.openChat",
+        "title": "DeepSeek Harness: Open Chat Panel",
+        "category": "DSH",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "dsh.openInBrowser",
+        "title": "DeepSeek Harness: Open in Browser",
+        "category": "DSH",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "dsh.start",
+        "title": "DeepSeek Harness: Start Server",
+        "category": "DSH",
+        "icon": "$(play)"
+      },
+      {
+        "command": "dsh.stop",
+        "title": "DeepSeek Harness: Stop Server",
+        "category": "DSH",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "dsh.restart",
+        "title": "DeepSeek Harness: Restart Server",
+        "category": "DSH",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dsh.reloadPanel",
+        "title": "DeepSeek Harness: Reload Chat Panel",
+        "category": "DSH",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dsh.showLogs",
+        "title": "DeepSeek Harness: Show Logs",
+        "category": "DSH",
+        "icon": "$(output)"
+      }
+    ],
+    "configuration": {
+      "title": "DeepSeek Harness",
+      "properties": {
+        "dsh.port": {
+          "type": "number",
+          "default": 3080,
+          "minimum": 0,
+          "maximum": 65535,
+          "markdownDescription": "Port for the embedded dsh web server. `0` lets the OS pick a free port. If a dsh server is already listening on this port, the extension adopts it instead of starting a new process."
+        },
+        "dsh.home": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "DSH_HOME data directory (profiles, sessions, settings, credentials). Empty = the system default (`~/.dsh` or `$DSH_HOME`). Reusing your existing home makes the embedded server see your credentials and settings."
+        },
+        "dsh.cliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the dsh CLI to run: either `…/node_modules/@deepseek-ai/dsh/lib/bin.js` or a `dsh` command name on PATH. Empty = auto resolution (bundled install, PATH lookup, then auto-install)."
+        },
+        "dsh.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Start (or adopt) the dsh server automatically when the chat panel is opened."
+        },
+        "dsh.autoRestart": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Restart the server once after an unexpected exit while the panel is open."
+        },
+        "dsh.autoInstall": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "If no dsh installation is found, run `npm install @deepseek-ai/dsh` into the extension storage directory automatically. Requires npm on PATH."
+        },
+        "dsh.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra CLI arguments forwarded to `dsh web` (e.g. `--trusted-host`)."
+        },
+        "dsh.workspaceRoot": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Working directory for the dsh process. Empty = the first workspace folder, or the user home when no folder is open."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies",
+    "smoke": "npm run compile && node out/smoke.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.4.5"
+  }
+}
