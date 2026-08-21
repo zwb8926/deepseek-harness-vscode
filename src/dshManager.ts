@@ -41,6 +41,8 @@ export interface DshRuntimeInfo {
   external?: boolean;
   /** Human-readable detail, usually an error message. */
   detail?: string;
+  /** The current VS Code project directory resolved at click time. */
+  project?: string;
 }
 
 export interface DshOptions {
@@ -129,6 +131,7 @@ export class DshManager {
   private url?: string;
   private external = false;
   private detail?: string;
+  private project?: string;
   private disposed = false;
   private stopping = false;
   private autoRestartCount = 0;
@@ -151,8 +154,15 @@ export class DshManager {
       state: this.state,
       url: this.url,
       external: this.external,
-      detail: this.detail
+      detail: this.detail,
+      project: this.project
     };
+  }
+
+  /** Record the current VS Code project and refresh UI consumers. */
+  setProject(project: string): void {
+    this.project = project;
+    this.opts.onInfo(this.info);
   }
 
   get running(): boolean {

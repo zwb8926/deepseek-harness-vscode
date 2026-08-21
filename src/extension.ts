@@ -74,14 +74,20 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
+  /** Resolve the current VS Code project directory at click time.
+   *  Order: dsh.workspaceRoot setting → the workspace folder containing the
+   *  active file → the first workspace folder → the active file's directory
+   *  → the user home (logged; the launcher shows the resolved path). */
   function workspaceCwd(): string {
     const configuredRoot = getCfg("workspaceRoot", "");
     if (configuredRoot !== "") return configuredRoot;
-    // 1. First workspace folder (the current project).
+    const active = vscode.window.activeTextEditor?.document.uri;
+    if (active !== undefined && active.scheme === "file") {
+      const containing = vscode.workspace.getWorkspaceFolder(active);
+      if (containing !== undefined) return containing.uri.fsPath;
+    }
     const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (folder !== undefined && folder !== "") return folder;
-    // 2. A single opened file: use its directory as the project.
-    const active = vscode.window.activeTextEditor?.document.uri;
     if (active !== undefined && active.scheme === "file") {
       const dir = path.dirname(active.fsPath);
       if (dir !== "") return dir;
@@ -118,7 +124,10 @@ export function activate(context: vscode.ExtensionContext): void {
       await ensureStarted();
     }
     if (!manager.running) return; // start failed; the error state explains why
+    // Resolve the current VS Code project AT CLICK TIME and surface it.
     const project = workspaceCwd();
+    manager.setProject(project);
+    log(`workspaceCwd: ${project}`);
 
     // 1. Adopt/create the workspace record for the project.
     const workspaceId = await manager.ensureWorkspace(project);
