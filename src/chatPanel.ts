@@ -15,21 +15,26 @@ export class ChatPanel {
   private panel?: vscode.WebviewPanel;
   private lastInfo?: DshRuntimeInfo;
 
-  constructor(private readonly onAction: (action: PanelAction) => void) {}
+  constructor(
+    private readonly onAction: (action: PanelAction) => void,
+    private readonly extensionUri: vscode.Uri
+  ) {}
 
   open(): void {
     if (this.panel === undefined) {
       this.panel = vscode.window.createWebviewPanel(
         ChatPanel.viewType,
         "DeepSeek Harness",
-        // Open beside the current editor, Claude-style: the chat is an editor tab.
-        vscode.ViewColumn.Beside,
+        // Full-width editor tab (like a file tab, Claude-style): opens in the
+        // active editor group without splitting.
+        vscode.ViewColumn.Active,
         {
           enableScripts: true,
           retainContextWhenHidden: true,
           localResourceRoots: []
         }
       );
+      this.panel.iconPath = vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon.png");
       const disposables: vscode.Disposable[] = [];
       this.panel.onDidDispose(
         () => {

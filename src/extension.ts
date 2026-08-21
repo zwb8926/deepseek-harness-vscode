@@ -41,26 +41,25 @@ export function activate(context: vscode.ExtensionContext): void {
     onInfo: (info) => {
       renderStatus(info);
       panel.update(info);
-      launcher.update(info);
     },
     log
   });
 
-  const panel = new ChatPanel((action: PanelAction) => {
-    void handlePanelAction(action);
-  });
-
-  // Activity-bar (whale icon) → launcher view; clicking it opens the chat as
-  // an editor tab while the left toolbar (launcher) stays open — no flicker,
-  // no auto-closing of the sidebar.
-  const launcher = new LauncherViewProvider(
+  const panel = new ChatPanel(
     (action: PanelAction) => {
       void handlePanelAction(action);
     },
-    () => {
-      void openChatInEditor();
-    }
+    context.extensionUri
   );
+
+  // Activity-bar whale icon → chat opens as a full editor tab; the sidebar
+  // view is empty and closes immediately, so no plugin UI ever lives there.
+  const launcher = new LauncherViewProvider(() => {
+    void openChatInEditor();
+    void vscode.commands.executeCommand("workbench.action.closeSidebar").then(undefined, () => {
+      /* best-effort: sidebar may already be closed */
+    });
+  });
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcher, {
       webviewOptions: { retainContextWhenHidden: true }
@@ -114,7 +113,6 @@ export function activate(context: vscode.ExtensionContext): void {
         break;
       case "reload":
         panel.reload();
-        launcher.reload();
         break;
       case "open-browser":
         await openInBrowser();

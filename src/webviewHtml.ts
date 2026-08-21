@@ -59,19 +59,6 @@ button {
 button:hover { background: var(--vscode-button-hoverBackground); }
 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
 button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-.launcher { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
-.launcher h1 { font-size: 14px; }
-.launcher .status {
-  font-size: 12px; line-height: 1.6; padding: 8px 10px; border-radius: 6px;
-  background: var(--vscode-textBlockQuote-background);
-  border: 1px solid var(--vscode-widget-border, transparent);
-}
-.launcher .status .state { font-weight: 600; }
-.launcher .status .state.running { color: var(--vscode-testing-iconPassed, #4ec9b0); }
-.launcher .status .state.error { color: var(--vscode-testing-iconFailed, #f14c4c); }
-.launcher .row { display: flex; gap: 6px; flex-wrap: wrap; }
-.launcher button { flex: 1; min-width: 90px; }
-.launcher p.hint { font-size: 11px; color: var(--vscode-descriptionForeground); }
 `;
 
 export function shellHtml(body: string): string {
@@ -114,53 +101,6 @@ function placeholderHtml(title: string, detail: string): string {
   <p>${detail}</p>
   <p><code>DeepSeek Harness</code> logs keep the full startup trace.</p>
 </div>`;
-}
-
-/** Sidebar launcher: server state + actions. The chat UI itself lives in the editor. */
-export function launcherBody(info?: DshRuntimeInfo): string {
-  const stateLabel = stateLabelOf(info);
-  const stateClass = info?.state === "running" ? "running" : info?.state === "error" ? "error" : "";
-  const urlText =
-    info?.state === "running" && info.url !== undefined
-      ? `<br><code>${escapeHtml(info.url)}</code>${info.external === true ? " <em>(adopted)</em>" : ""}`
-      : "";
-  return `<div class="launcher">
-  <h1>DeepSeek Harness</h1>
-  <div class="status"><span class="state ${stateClass}">${stateLabel}</span>${urlText}</div>
-  <div class="row">
-    <button data-cmd="open-chat">Open Chat</button>
-    <button data-cmd="open-browser">Browser</button>
-  </div>
-  <div class="row">
-    <button data-cmd="start">Start</button>
-    <button data-cmd="stop">Stop</button>
-    <button data-cmd="restart">Restart</button>
-  </div>
-  <div class="row">
-    <button data-cmd="reload">Reload</button>
-    <button data-cmd="show-logs">Logs</button>
-  </div>
-  <p class="hint">The chat opens as an editor tab, like Claude Code.</p>
-</div>`;
-}
-
-function stateLabelOf(info?: DshRuntimeInfo): string {
-  switch (info?.state) {
-    case "running":
-      return "Running";
-    case "locating":
-      return "Locating dsh CLI…";
-    case "installing":
-      return "Installing…";
-    case "starting":
-      return "Starting…";
-    case "error":
-      return "Error — " + escapeHtml(info.detail ?? "unknown");
-    case "stopped":
-      return "Stopped";
-    default:
-      return "Idle";
-  }
 }
 
 /** Build the #stage body for one runtime state. */
