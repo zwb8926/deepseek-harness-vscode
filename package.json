@@ -126,6 +126,11 @@
           "default": true,
           "markdownDescription": "When several dsh installs are available (bundled / PATH / global npm), use the **newest** one. Off = always prefer the bundled version. 官方发布新版后，用 `npm i -g @deepseek-ai/dsh` 安装新版，扩展会自动使用它，无需重新打包扩展。"
         },
+        "dsh.autoUpdate": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "每次启动时查询 npm registry，若官方 `@deepseek-ai/dsh` 有比当前更新的版本，自动安装到扩展存储并优先使用（需要本机有 npm/npx；离线或失败时自动回退到现有版本）。关掉后只使用内置版本。"
+        },
         "dsh.autoRestart": {
           "type": "boolean",
           "default": true,

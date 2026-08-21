@@ -61,6 +61,8 @@ export interface DshOptions {
   autoRestart?: boolean;
   /** When true, among the found dsh installs pick the newest version (default true). */
   preferNewer?: boolean;
+  /** When true (and preferNewer), check the npm registry on start and auto-install a newer @deepseek-ai/dsh. */
+  autoUpdate?: boolean;
   /** Test hook: force this executable as the node runtime. */
   nodeExecOverride?: string;
   /** Test hook: treat nodeExecOverride as an Electron binary (ELECTRON_RUN_AS_NODE). */
@@ -140,7 +142,7 @@ export class DshManager {
   }
 
   /** Update spawn-relevant options (applied on the next start). */
-  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer">>): void {
+  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "autoUpdate">>): void {
     Object.assign(this.opts, partial);
   }
 
@@ -518,7 +520,14 @@ export class DshManager {
       if (globalBin !== undefined) candidates.push(globalBin);
     }
 
-    // 3. Pick: newest when preferNewer (default), else the bundled-first order.
+    // 3. Auto-update: when enabled and npm is available, compare the npm
+    //    registry "latest" against the best candidate; if newer, install it
+    //    into the extension storage and let it win the ranking.
+    if ((opts.preferNewer ?? true) && opts.autoUpdate === true && opts.autoInstallDir !== undefined) {
+      await this.maybeAutoUpdate(candidates);
+    }
+
+    // 4. Pick: newest when preferNewer (default), else the bundled-first order.
     let chosen: (typeof candidates)[number] | undefined;
     if (candidates.length > 0) {
       if (opts.preferNewer ?? true) {
@@ -539,7 +548,7 @@ export class DshManager {
       return chosen;
     }
 
-    // 4. Auto-install into the extension storage directory.
+    // 5. Auto-install into the extension storage directory (no candidate at all).
     if (opts.autoInstall && opts.autoInstallDir !== undefined) {
       this.setState("installing");
       const installed = await this.autoInstall(opts.autoInstallDir);
@@ -547,6 +556,57 @@ export class DshManager {
     }
 
     return undefined;
+  }
+
+  /** Install the newest @deepseek-ai/dsh from the registry when it is newer than every known candidate. */
+  private async maybeAutoUpdate(candidates: Array<{ version?: string }>): Promise<void> {
+    const npm = await findOnPath("npm");
+    if (npm === undefined) {
+      this.opts.log("auto-update: npm not found, staying on bundled dsh");
+      return;
+    }
+    const known = candidates.map((c) => c.version).filter((v): v is string => v !== undefined);
+    if (known.length === 0) {
+      this.opts.log("auto-update: no known dsh version to compare against");
+      return;
+    }
+    const knownBest = [...known].sort((a, b) => compareVersions(b, a))[0];
+    const latest = await this.npmRegistryVersion(npm);
+    if (latest === undefined) {
+      this.opts.log("auto-update: could not read the registry (offline?), staying on current dsh");
+      return;
+    }
+    if (compareVersions(latest, knownBest) <= 0) {
+      this.opts.log(`auto-update: registry ${latest} is not newer than ${knownBest}, nothing to do`);
+      return;
+    }
+    this.opts.log(`auto-update: registry has ${latest} (> ${knownBest}) — installing into extension storage…`);
+    this.setState("installing");
+    const dir = this.opts.autoInstallDir!;
+    const result = await runCommand(
+      npm,
+      ["install", "--no-fund", "--no-audit", "--prefix", dir, `@deepseek-ai/dsh@${latest}`],
+      { shell: true, log: this.opts.log, timeoutMs: 15 * 60_000 }
+    );
+    if (!result.ok) {
+      this.opts.log("auto-update: install failed, staying on the current dsh");
+      return;
+    }
+    const installed = await this.locateInTree(dir);
+    if (installed !== undefined) candidates.push(installed);
+  }
+
+  /** `npm view @deepseek-ai/dsh version` with a timeout; undefined on any failure. */
+  private async npmRegistryVersion(npm: string): Promise<string | undefined> {
+    const result = await runCommand(npm, ["view", "@deepseek-ai/dsh", "version"], {
+      shell: true,
+      capture: true,
+      timeoutMs: 20_000,
+      log: this.opts.log
+    });
+    if (!result.ok) return undefined;
+    const version = (result.stdout ?? "").trim().split(/\r?\n/)[0]?.trim();
+    return version !== undefined && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ? version : undefined;
   }
 
   /** Probe the version of a PATH `dsh` command (best effort; unknown on failure). */
@@ -700,12 +760,32 @@ interface RunResult {
 function runCommand(
   cmd: string,
   args: string[],
-  opts: { shell?: boolean; capture?: boolean; log?: (line: string) => void }
+  opts: { shell?: boolean; capture?: boolean; log?: (line: string) => void; timeoutMs?: number }
 ): Promise<RunResult> {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { shell: opts.shell === true, windowsHide: true });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const finish = (result: RunResult): void => {
+      if (!settled) {
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        resolve(result);
+      }
+    };
+    const timer =
+      opts.timeoutMs !== undefined
+        ? setTimeout(() => {
+            opts.log?.(`${cmd} timed out after ${String(opts.timeoutMs)}ms`);
+            try {
+              child.kill();
+            } catch {
+              /* already gone */
+            }
+            finish({ ok: false });
+          }, opts.timeoutMs)
+        : undefined;
     child.stdout?.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8");
       if (opts.capture === true) stdout += text;
@@ -718,13 +798,13 @@ function runCommand(
     });
     child.on("error", (err) => {
       opts.log?.(`run error ${cmd}: ${String(err)}`);
-      resolve({ ok: false });
+      finish({ ok: false });
     });
     child.on("exit", (code) => {
       if (code !== 0 && opts.capture === true) {
         opts.log?.(`${cmd} exited ${String(code)}: ${stderr.trim()}`);
       }
-      resolve({ ok: code === 0, stdout });
+      finish({ ok: code === 0, stdout });
     });
   });
 }

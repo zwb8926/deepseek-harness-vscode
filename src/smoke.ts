@@ -137,6 +137,29 @@ async function scenarioElectronNode(cliPath: string | undefined, electron: strin
   check("electron-node server stopped", manager.info.state === "stopped", `state=${manager.info.state}`);
 }
 
+/** Fourth scenario: autoUpdate consults the registry; with no newer release the bundled dsh must still run. */
+async function scenarioAutoUpdate(cliPath: string | undefined): Promise<void> {
+  console.log("— auto-update —");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
+  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-autoupd-"));
+  const manager = new DshManager({
+    port: 0,
+    home,
+    cliPath,
+    autoInstall: false,
+    autoUpdate: true,
+    preferNewer: true,
+    autoInstallDir: installDir,
+    autoRestart: false,
+    cwd: home,
+    onInfo: (info) => console.log(`  [state] ${JSON.stringify(info)}`),
+    log: (line) => console.log(`  [dsh] ${line}`)
+  });
+  await manager.start();
+  check("auto-update still reaches running", manager.info.state === "running" && manager.info.url !== undefined, `state=${manager.info.state} detail=${manager.info.detail ?? ""}`);
+  await manager.stop();
+}
+
 async function main(): Promise<void> {
   console.log("— version comparison —");
   const vChecks: Array<[string, string, number]> = [
@@ -218,6 +241,8 @@ async function main(): Promise<void> {
   if (cli.electron !== undefined) {
     await scenarioElectronNode(cli.cliPath, cli.electron);
   }
+
+  await scenarioAutoUpdate(cli.cliPath);
 
   console.log(failures === 0 ? "SMOKE PASSED" : `SMOKE FAILED (${failures} assertion${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);
