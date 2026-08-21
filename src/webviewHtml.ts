@@ -120,7 +120,7 @@ export function launcherBody(info?: DshRuntimeInfo): string {
       : `<div class="status">${stateLabelOf(info)}</div>`;
   return `<div class="launcher">
   <h1>DeepSeek Harness</h1>
-  <button class="primary" data-cmd="new-session">＋ 新建会话</button>
+  <button class="primary" data-cmd="new-session">打开DSH</button>
   ${status}
 </div>`;
 }

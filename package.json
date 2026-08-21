@@ -4,7 +4,7 @@
   "description": "DeepSeek Harness inside VS Code: auto-starts the dsh web server and opens the full chat/session/tool/approval UI as an editor tab (Claude-style), with start/stop control, status bar, and open-in-browser.",
   "version": "1.0.0",
   "publisher": "zwb8926",
-  "icon": "media/dsh-icon.png",
+  "icon": "media/dsh-icon-outline.png",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -23,6 +23,7 @@
   ],
   "activationEvents": [
     "onStartupFinished",
+    "onView:dsh.launcher",
     "onCommand:dsh.openChat",
     "onCommand:dsh.openInBrowser",
     "onCommand:dsh.start",
@@ -37,8 +38,7 @@
       {
         "command": "dsh.openChat",
         "title": "DeepSeek Harness: Open Chat Panel",
-        "category": "DSH",
-        "icon": "$(comment-discussion)"
+        "category": "DSH"
       },
       {
         "command": "dsh.openInBrowser",
@@ -82,7 +82,7 @@
         {
           "id": "dsh",
           "title": "DeepSeek Harness",
-          "icon": "media/dsh-icon.svg"
+          "icon": "media/dsh-icon-white.png"
         }
       ]
     },
@@ -121,6 +121,16 @@
           "default": true,
           "markdownDescription": "Start (or adopt) the dsh server automatically when VS Code starts and when the chat UI is opened."
         },
+        "dsh.preferNewer": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When several dsh installs are available (bundled / PATH / global npm), use the **newest** one. Off = always prefer the bundled version. 官方发布新版后，用 `npm i -g @deepseek-ai/dsh` 安装新版，扩展会自动使用它，无需重新打包扩展。"
+        },
+        "dsh.autoUpdate": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "每次启动时查询 npm registry，若官方 `@deepseek-ai/dsh` 有比当前更新的版本，自动安装到扩展存储并优先使用（需要本机有 npm/npx；离线或失败时自动回退到现有版本）。关掉后只使用内置版本。"
+        },
         "dsh.autoRestart": {
           "type": "boolean",
           "default": true,
@@ -151,8 +161,11 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package --no-dependencies",
+    "package": "vsce package --out DSH-for-VS-Code.vsix",
     "smoke": "npm run compile && node out/smoke.js"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "^0.1.0-rc.7"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

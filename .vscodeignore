@@ -2,9 +2,22 @@
 .ssh/**
 src/**
 out/**/*.map
-node_modules/**
 **/*.ts
 tsconfig.json
 .vscodeignore
 .gitignore
 smoke-notes.md
+
+# node_modules ships (bundled @deepseek-ai/dsh), but trim what runtime never reads
+node_modules/**/*.map
+node_modules/**/*.d.ts
+node_modules/**/test/**
+node_modules/**/tests/**
+node_modules/**/__tests__/**
+node_modules/**/README*
+node_modules/**/LICENSE*
+node_modules/**/CHANGELOG*
+node_modules/**/.github/**
+node_modules/**/docs/**
+node_modules/**/examples/**
+node_modules/**/benchmark/**
