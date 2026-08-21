@@ -312,6 +312,12 @@ export class DshManager {
     return this.createSession(path);
   }
 
+  /** List the real workspace records (verification/diagnostics). */
+  async listWorkspaces(): Promise<Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }> | undefined> {
+    const value = (await this.rpc("workspace.list", {})) as { items?: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }> } | undefined;
+    return value?.items;
+  }
+
   /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */
   async applyTheme(preference: "light" | "dark" | "system"): Promise<boolean> {
     const value = await this.rpc("settings.update", { ns: "ui-theme", patch: { preference } });

@@ -76,7 +76,17 @@ export function activate(context: vscode.ExtensionContext): void {
 
   function workspaceCwd(): string {
     const configuredRoot = getCfg("workspaceRoot", "");
-    return configuredRoot !== "" ? configuredRoot : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir());
+    if (configuredRoot !== "") return configuredRoot;
+    // 1. First workspace folder (the current project).
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (folder !== undefined && folder !== "") return folder;
+    // 2. A single opened file: use its directory as the project.
+    const active = vscode.window.activeTextEditor?.document.uri;
+    if (active !== undefined && active.scheme === "file") {
+      const dir = path.dirname(active.fsPath);
+      if (dir !== "") return dir;
+    }
+    return os.homedir();
   }
 
   /** Refresh spawn-relevant options from settings before a start. */
@@ -111,7 +121,10 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
       return;
     }
-    log(`created session: ${sessionId} (cwd: ${project})`);
+    log(`created session: ${sessionId} (workspace: ${project})`);
+    // Verification: log the real workspace records so failures are visible.
+    const workspaces = await manager.listWorkspaces();
+    log(`workspace.list: ${JSON.stringify(workspaces?.map((w) => ({ title: w.title, path: w.path, sessions: w.sessionIds.length })))}`);
     panel.open();
     panel.reload();
   }
