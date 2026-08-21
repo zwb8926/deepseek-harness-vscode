@@ -51,17 +51,14 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   // Activity-bar (whale icon) → launcher view; clicking it opens the chat as
-  // an editor tab and closes the sidebar (Claude-like), so the work area is
-  // never squeezed into the sidebar.
+  // an editor tab while the left toolbar (launcher) stays open — no flicker,
+  // no auto-closing of the sidebar.
   const launcher = new LauncherViewProvider(
     (action: PanelAction) => {
       void handlePanelAction(action);
     },
     () => {
       void openChatInEditor();
-      void vscode.commands.executeCommand("workbench.action.closeSidebar").then(undefined, () => {
-        /* best-effort: sidebar may already be closed */
-      });
     }
   );
   context.subscriptions.push(
