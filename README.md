@@ -8,11 +8,15 @@ in a webview panel, so you never leave the editor.
 
 ## Features
 
+- **Always-visible UI** — after install, the **DSH** icon appears in the
+  activity bar with a Chat view embedding the GUI, plus a status bar item.
+  The extension activates at startup and auto-starts (or adopts) the server
+  when `dsh.autoStart` is on.
 - **Embedded server** — on first use the extension locates an existing `dsh`
   installation (bundled `node_modules`, PATH, global npm) and, if none is found
   and npm is available, auto-installs `@deepseek-ai/dsh` into the extension
   storage (one-time). The `dsh web` process is spawned as a child process and
-  supervised (unexpected exit → one automatic restart when enabled).
+  supervised (unexpected exit → bounded automatic restarts when enabled).
 - **Adopt an existing server** — if a dsh web server is already listening on
   `dsh.port` (e.g. your own `dsh web` on 3080), the extension connects to it
   instead of starting a second process.
@@ -29,7 +33,7 @@ in a webview panel, so you never leave the editor.
 
 | Command | Description |
 | --- | --- |
-| `DSH: Open Chat Panel` | Open the embedded GUI (starts the server first when `dsh.autoStart` is on) |
+| `DSH: Open Chat Panel` | Open the embedded GUI in an editor tab (starts the server first when `dsh.autoStart` is on) |
 | `DSH: Open in Browser` | Open the running GUI in your default browser |
 | `DSH: Start Server` | Start (or adopt) the dsh web server |
 | `DSH: Stop Server` | Stop the owned server (adopted servers are left untouched) |
@@ -37,7 +41,9 @@ in a webview panel, so you never leave the editor.
 | `DSH: Reload Chat Panel` | Reload the iframe |
 | `DSH: Show Logs` | Open the output channel with the server log |
 
-The status bar item shows the server state and opens the chat panel on click.
+The **DSH** activity-bar icon opens the Chat view (same embedded GUI in the
+sidebar); the status bar item shows the server state and opens the chat UI on
+click.
 
 ## Settings
 
@@ -98,7 +104,7 @@ node out/smoke.js --cli "C:\path\to\node_modules\@deepseek-ai\dsh\lib\bin.js"
 Package:
 
 ```bash
-npm run package        # produces deepseek-harness-vscode-0.1.0.vsix
+npm run package        # produces deepseek-harness-vscode-1.0.0.vsix
 ```
 
 ## Notes & limitations

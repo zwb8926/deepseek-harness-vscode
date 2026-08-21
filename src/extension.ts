@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { ChatPanel, PanelAction } from "./chatPanel";
+import { ChatViewProvider } from "./chatView";
 import { DshManager, DshRuntimeInfo } from "./dshManager";
 
 function getCfg<T>(key: string, fallback: T): T {
@@ -40,6 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onInfo: (info) => {
       renderStatus(info);
       panel.update(info);
+      chatView.update(info);
     },
     log
   });
@@ -47,6 +49,15 @@ export function activate(context: vscode.ExtensionContext): void {
   const panel = new ChatPanel((action: PanelAction) => {
     void handlePanelAction(action);
   });
+
+  const chatView = new ChatViewProvider((action: PanelAction) => {
+    void handlePanelAction(action);
+  });
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatView, {
+      webviewOptions: { retainContextWhenHidden: true }
+    })
+  );
 
   function workspaceCwd(): string {
     const configuredRoot = getCfg("workspaceRoot", "");
@@ -172,6 +183,11 @@ export function activate(context: vscode.ExtensionContext): void {
       log("settings changed — new values apply on the next start (port/home/args)");
     })
   );
+
+  // Auto-start after startup when enabled, so the UI is live right away.
+  if (getCfg("autoStart", true)) {
+    void ensureStarted().catch((err) => log(`auto-start failed: ${String(err)}`));
+  }
 
   context.subscriptions.push({
     dispose: () => {
