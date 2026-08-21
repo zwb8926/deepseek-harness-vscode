@@ -25,7 +25,6 @@ const CSP = [
 ].join("; ");
 
 const BASE_CSS = `
-:root { color-scheme: light dark; }
 html, body { margin: 0; padding: 0; height: 100%; }
 body {
   font-family: var(--vscode-font-family, system-ui);
@@ -34,7 +33,7 @@ body {
   display: flex; flex-direction: column;
 }
 #stage { flex: 1; display: flex; flex-direction: column; }
-#stage iframe { width: 100%; height: 100%; border: 0; flex: 1; background: #fff; }
+#stage iframe { width: 100%; height: 100%; border: 0; flex: 1; background: var(--vscode-editor-background); }
 .placeholder {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 14px; text-align: center; padding: 32px;
@@ -113,7 +112,7 @@ function placeholderHtml(title: string, detail: string): string {
 </div>`;
 }
 
-/** Sidebar panel: create-session entry + server status. The chat lives in the editor. */
+/** Sidebar panel: one button to create & open a session, plus server status. */
 export function launcherBody(info?: DshRuntimeInfo): string {
   const status =
     info?.state === "running" && info.url !== undefined
@@ -122,7 +121,6 @@ export function launcherBody(info?: DshRuntimeInfo): string {
   return `<div class="launcher">
   <h1>DeepSeek Harness</h1>
   <button class="primary" data-cmd="new-session">＋ 新建会话</button>
-  <button data-cmd="open-chat">打开聊天</button>
   ${status}
 </div>`;
 }
