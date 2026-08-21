@@ -18,7 +18,7 @@
  */
 
 import { spawn, ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -59,6 +59,8 @@ export interface DshOptions {
   autoInstallDir?: string;
   /** Restart once after an unexpected exit. */
   autoRestart?: boolean;
+  /** When true, among the found dsh installs pick the newest version (default true). */
+  preferNewer?: boolean;
   /** Test hook: force this executable as the node runtime. */
   nodeExecOverride?: string;
   /** Test hook: treat nodeExecOverride as an Electron binary (ELECTRON_RUN_AS_NODE). */
@@ -74,6 +76,49 @@ const HEALTH_TIMEOUT_MS = 60_000;
 const HEALTH_INTERVAL_MS = 400;
 const RESTART_DELAY_MS = 2_000;
 const MAX_AUTO_RESTARTS = 2;
+
+/**
+ * Compare two dsh version strings (semver-ish, e.g. "0.1.0-rc.7").
+ * Returns <0 when a < b, 0 when equal, >0 when a > b. Prerelease sorts
+ * below the same base without a prerelease; numeric identifiers have lower
+ * precedence than alphanumeric ones, per semver.
+ */
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string): { base: number[]; pre: Array<number | string> } => {
+    const [baseStr, preStr] = v.split("-", 2);
+    const base = baseStr.split(".").map((n) => parseInt(n, 10) || 0);
+    while (base.length < 3) base.push(0);
+    const pre: Array<number | string> =
+      preStr === undefined
+        ? []
+        : preStr.split(/[.\-]/).map((n) => (/^\d+$/.test(n) ? parseInt(n, 10) : n));
+    return { base, pre };
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < 3; i++) {
+    if (pa.base[i] !== pb.base[i]) return pa.base[i] < pb.base[i] ? -1 : 1;
+  }
+  if (pa.pre.length === 0 && pb.pre.length === 0) return 0;
+  if (pa.pre.length === 0) return 1;
+  if (pb.pre.length === 0) return -1;
+  const len = Math.max(pa.pre.length, pb.pre.length);
+  for (let i = 0; i < len; i++) {
+    const x: number | string | undefined = pa.pre[i];
+    const y: number | string | undefined = pb.pre[i];
+    if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+    if (typeof x === "number" && typeof y === "number") {
+      if (x !== y) return x < y ? -1 : 1;
+    } else if (typeof x === "number") {
+      return 1; // numeric < alphanumeric in prerelease
+    } else if (typeof y === "number") {
+      return -1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
 
 export class DshManager {
   private opts: DshOptions;
@@ -95,7 +140,7 @@ export class DshManager {
   }
 
   /** Update spawn-relevant options (applied on the next start). */
-  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir">>): void {
+  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer">>): void {
     Object.assign(this.opts, partial);
   }
 
@@ -451,7 +496,7 @@ export class DshManager {
   private async resolveCli(): Promise<{ cmd: string; prefixArgs: string[]; shell?: boolean; cwd?: string; env?: NodeJS.ProcessEnv } | undefined> {
     const opts = this.opts;
 
-    // 1. Explicit setting.
+    // 1. Explicit setting (always respected as-is).
     const explicit = opts.cliPath?.trim() ?? "";
     if (explicit !== "") {
       const resolved = await this.resolveExplicit(explicit);
@@ -459,25 +504,42 @@ export class DshManager {
       this.opts.log(`resolve: dsh.cliPath "${explicit}" not usable`);
     }
 
-    // 2. Extension-bundled install (node_modules/@deepseek-ai/dsh next to this code).
+    // 2. Collect candidates: bundled install, PATH `dsh`, global npm install.
+    const candidates: Array<{ cmd: string; prefixArgs: string[]; shell?: boolean; env?: NodeJS.ProcessEnv; version?: string }> = [];
     const bundled = await this.locateInTree(path.join(__dirname, ".."));
-    if (bundled !== undefined) return bundled;
+    if (bundled !== undefined) candidates.push(bundled);
 
-    // 3. PATH: `dsh` command (shell shim works even without node on PATH).
     const onPath = await findOnPath("dsh");
-    if (onPath !== undefined) {
-      this.opts.log(`resolve: using dsh from PATH (${onPath})`);
-      return { cmd: onPath, prefixArgs: [], shell: true };
-    }
+    if (onPath !== undefined) candidates.push(await this.probePathCandidate(onPath));
 
-    // 4. Global npm install.
     const globalRoot = await npmGlobalRoot();
     if (globalRoot !== undefined) {
       const globalBin = await this.locateInTree(globalRoot);
-      if (globalBin !== undefined) return globalBin;
+      if (globalBin !== undefined) candidates.push(globalBin);
     }
 
-    // 5. Auto-install into the extension storage directory.
+    // 3. Pick: newest when preferNewer (default), else the bundled-first order.
+    let chosen: (typeof candidates)[number] | undefined;
+    if (candidates.length > 0) {
+      if (opts.preferNewer ?? true) {
+        chosen = [...candidates].sort((x, y) => {
+          if (x.version === undefined && y.version === undefined) return 0;
+          if (x.version === undefined) return 1;
+          if (y.version === undefined) return -1;
+          return compareVersions(y.version, x.version);
+        })[0];
+      } else {
+        chosen = candidates[0];
+      }
+    }
+    if (chosen !== undefined) {
+      this.opts.log(
+        `resolve: chose dsh v${chosen.version ?? "?"} (${candidates.map((c) => `${c.version ?? "?"}@${c.cmd}`).join(" | ")})`
+      );
+      return chosen;
+    }
+
+    // 4. Auto-install into the extension storage directory.
     if (opts.autoInstall && opts.autoInstallDir !== undefined) {
       this.setState("installing");
       const installed = await this.autoInstall(opts.autoInstallDir);
@@ -487,7 +549,14 @@ export class DshManager {
     return undefined;
   }
 
-  private async locateInTree(rootDir: string): Promise<{ cmd: string; prefixArgs: string[]; env?: NodeJS.ProcessEnv } | undefined> {
+  /** Probe the version of a PATH `dsh` command (best effort; unknown on failure). */
+  private async probePathCandidate(cmdPath: string): Promise<{ cmd: string; prefixArgs: string[]; shell: boolean; version?: string }> {
+    const result = await runCommand(cmdPath, ["--version"], { shell: true, capture: true });
+    const version = result.ok ? (result.stdout ?? "").trim().match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0] : undefined;
+    return { cmd: cmdPath, prefixArgs: [], shell: true, version };
+  }
+
+  private async locateInTree(rootDir: string): Promise<{ cmd: string; prefixArgs: string[]; env?: NodeJS.ProcessEnv; version?: string } | undefined> {
     let bin: string | undefined;
     try {
       const require = createRequire(path.join(rootDir, "noop.js"));
@@ -506,8 +575,9 @@ export class DshManager {
       this.opts.log("resolve: dsh found, but no node runtime is available to run it");
       return undefined;
     }
-    this.opts.log(`resolve: using dsh at ${bin} (node: ${node.cmd}${node.electron === true ? " via ELECTRON_RUN_AS_NODE" : ""})`);
-    return { cmd: node.cmd, prefixArgs: [bin], env: node.electron === true ? { ELECTRON_RUN_AS_NODE: "1" } : undefined };
+    const version = readPackageVersion(path.join(rootDir, "node_modules", "@deepseek-ai", "dsh", "package.json"));
+    this.opts.log(`resolve: found dsh v${version ?? "?"} at ${bin} (node: ${node.cmd}${node.electron === true ? " via ELECTRON_RUN_AS_NODE" : ""})`);
+    return { cmd: node.cmd, prefixArgs: [bin], env: node.electron === true ? { ELECTRON_RUN_AS_NODE: "1" } : undefined, version };
   }
 
   private async resolveExplicit(explicit: string): Promise<{ cmd: string; prefixArgs: string[]; shell?: boolean; env?: NodeJS.ProcessEnv } | undefined> {
@@ -567,6 +637,16 @@ export class DshManager {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Read the `version` field of a package.json, or undefined when missing/unreadable. */
+function readPackageVersion(pkgJsonPath: string): string | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(pkgJsonPath, "utf8")) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Find an executable on PATH (Windows: resolves .cmd/.exe). Returns the command to spawn (shell:true friendly). */

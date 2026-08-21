@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DshManager } from "./dshManager";
+import { DshManager, compareVersions } from "./dshManager";
 
 interface Cli {
   cliPath?: string;
@@ -138,6 +138,21 @@ async function scenarioElectronNode(cliPath: string | undefined, electron: strin
 }
 
 async function main(): Promise<void> {
+  console.log("— version comparison —");
+  const vChecks: Array<[string, string, number]> = [
+    ["0.1.0-rc.7", "0.1.0-rc.8", -1],
+    ["0.1.0-rc.8", "0.1.0-rc.7", 1],
+    ["0.1.0", "0.1.0-rc.9", 1],
+    ["0.2.0", "0.1.99", 1],
+    ["1.0.0", "1.0.0", 0],
+    ["0.1.0-rc.7", "0.1.0-rc.7", 0],
+    ["0.1.0-rc.10", "0.1.0-rc.9", 1]
+  ];
+  for (const [a, b, want] of vChecks) {
+    const got = compareVersions(a, b);
+    check(`compareVersions(${a}, ${b}) = ${want}`, got === want || Math.sign(got) === Math.sign(want) || (want === 0 && got === 0), `got ${got}`);
+  }
+
   const cli = parseArgs(process.argv.slice(2));
   const home = cli.home ?? fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
   console.log(`smoke: DSH_HOME=${home} port=${cli.port} cli=${cli.cliPath ?? "(auto)"}`);

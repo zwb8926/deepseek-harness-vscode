@@ -121,6 +121,11 @@
           "default": true,
           "markdownDescription": "Start (or adopt) the dsh server automatically when VS Code starts and when the chat UI is opened."
         },
+        "dsh.preferNewer": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When several dsh installs are available (bundled / PATH / global npm), use the **newest** one. Off = always prefer the bundled version. 官方发布新版后，用 `npm i -g @deepseek-ai/dsh` 安装新版，扩展会自动使用它，无需重新打包扩展。"
+        },
         "dsh.autoRestart": {
           "type": "boolean",
           "default": true,
