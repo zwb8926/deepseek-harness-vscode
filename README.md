@@ -1,17 +1,21 @@
-# DeepSeek Harness for VS Code
+# DSH for VSCode
 
 Embed [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) inside VS Code.
 
-The extension **starts and manages the `dsh web` server itself** and renders the
+The extension **starts and manages the `dsh web` server itself** and opens the
 complete web GUI — chat, sessions, tool calls, trajectory, approvals, settings —
-in a webview panel, so you never leave the editor.
+**as an editor tab, Claude-style**: click the DSH (DeepSeek whale) icon in the
+activity bar and the chat opens beside your code; the sidebar only holds a
+small launcher with server controls.
 
 ## Features
 
-- **Always-visible UI** — after install, the **DSH** icon appears in the
-  activity bar with a Chat view embedding the GUI, plus a status bar item.
-  The extension activates at startup and auto-starts (or adopts) the server
-  when `dsh.autoStart` is on.
+- **Claude-like layout** — the whale icon in the activity bar opens the chat
+  UI in the editor area (not in the sidebar); the sidebar shows a compact
+  launcher (status + start/stop/restart/reload/logs) and closes automatically.
+- **Always-visible entry points** — the DSH whale icon, the status bar item,
+  and command palette commands; the extension activates at startup and
+  auto-starts (or adopts) the server when `dsh.autoStart` is on.
 - **Embedded server** — on first use the extension locates an existing `dsh`
   installation (bundled `node_modules`, PATH, global npm) and, if none is found
   and npm is available, auto-installs `@deepseek-ai/dsh` into the extension
@@ -33,17 +37,17 @@ in a webview panel, so you never leave the editor.
 
 | Command | Description |
 | --- | --- |
-| `DSH: Open Chat Panel` | Open the embedded GUI in an editor tab (starts the server first when `dsh.autoStart` is on) |
+| `DSH: Open Chat Panel` | Open the embedded GUI as an editor tab beside your code |
 | `DSH: Open in Browser` | Open the running GUI in your default browser |
 | `DSH: Start Server` | Start (or adopt) the dsh web server |
 | `DSH: Stop Server` | Stop the owned server (adopted servers are left untouched) |
 | `DSH: Restart Server` | Stop and start again |
-| `DSH: Reload Chat Panel` | Reload the iframe |
+| `DSH: Reload Chat Panel` | Reload the embedded GUI |
 | `DSH: Show Logs` | Open the output channel with the server log |
 
-The **DSH** activity-bar icon opens the Chat view (same embedded GUI in the
-sidebar); the status bar item shows the server state and opens the chat UI on
-click.
+The **DSH** whale icon in the activity bar opens the chat as an editor tab and
+closes the sidebar; the status bar item shows the server state and opens the
+chat on click.
 
 ## Settings
 
@@ -104,7 +108,7 @@ node out/smoke.js --cli "C:\path\to\node_modules\@deepseek-ai\dsh\lib\bin.js"
 Package:
 
 ```bash
-npm run package        # produces deepseek-harness-vscode-1.0.0.vsix
+npm run package        # produces DSH-for-VSCode-1.0.0.vsix
 ```
 
 ## Notes & limitations

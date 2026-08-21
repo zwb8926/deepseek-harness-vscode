@@ -19,11 +19,17 @@ export class ChatPanel {
 
   open(): void {
     if (this.panel === undefined) {
-      this.panel = vscode.window.createWebviewPanel(ChatPanel.viewType, "DeepSeek Harness", vscode.ViewColumn.One, {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-        localResourceRoots: []
-      });
+      this.panel = vscode.window.createWebviewPanel(
+        ChatPanel.viewType,
+        "DeepSeek Harness",
+        // Open beside the current editor, Claude-style: the chat is an editor tab.
+        vscode.ViewColumn.Beside,
+        {
+          enableScripts: true,
+          retainContextWhenHidden: true,
+          localResourceRoots: []
+        }
+      );
       const disposables: vscode.Disposable[] = [];
       this.panel.onDidDispose(
         () => {

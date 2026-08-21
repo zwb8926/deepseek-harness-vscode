@@ -1,21 +1,26 @@
 /**
- * ChatViewProvider — the activity-bar sidebar view that embeds the dsh web
- * GUI. Installed and activated, the extension always has visible UI: the DSH
- * icon in the activity bar, the Chat view with the embedded GUI, and the
- * status bar item.
+ * LauncherViewProvider — the activity-bar sidebar view.
+ *
+ * Clicking the DSH (whale) icon in the activity bar shows this launcher and
+ * immediately opens the real chat UI as an editor tab (Claude-like), then
+ * closes the sidebar. The launcher itself only holds the server state and
+ * control buttons; the embedded GUI lives exclusively in the editor panel.
  */
 
 import * as vscode from "vscode";
 import type { DshRuntimeInfo } from "./dshManager";
-import { PanelAction, shellHtml, stateBody } from "./webviewHtml";
+import { PanelAction, launcherBody, shellHtml } from "./webviewHtml";
 
-export class ChatViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = "dsh.chatView";
+export class LauncherViewProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = "dsh.launcher";
 
   private view?: vscode.WebviewView;
   private lastInfo?: DshRuntimeInfo;
 
-  constructor(private readonly onAction: (action: PanelAction) => void) {}
+  constructor(
+    private readonly onAction: (action: PanelAction) => void,
+    private readonly onVisible: () => void
+  ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -27,6 +32,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (msg !== null && typeof msg === "object" && typeof (msg as PanelAction).type === "string") {
         this.onAction(msg as PanelAction);
       }
+    });
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) this.onVisible();
     });
     webviewView.onDidDispose(() => {
       this.view = undefined;
@@ -45,6 +53,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private render(): void {
     if (this.view === undefined) return;
-    this.view.webview.html = shellHtml(stateBody(this.lastInfo));
+    this.view.webview.html = shellHtml(launcherBody(this.lastInfo));
   }
 }

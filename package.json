@@ -1,7 +1,7 @@
 {
   "name": "deepseek-harness-vscode",
-  "displayName": "DeepSeek Harness",
-  "description": "Embed DeepSeek Harness inside VS Code: auto-starts the dsh web server and renders the full chat/session/tool/approval UI in a webview panel, with start/stop/restart control, status bar, and open-in-browser.",
+  "displayName": "DSH for VSCode",
+  "description": "DeepSeek Harness inside VS Code: auto-starts the dsh web server and opens the full chat/session/tool/approval UI as an editor tab (Claude-style), with start/stop control, status bar, and open-in-browser.",
   "version": "1.0.0",
   "publisher": "dsh-community",
   "license": "MIT",
@@ -89,8 +89,8 @@
       "dsh": [
         {
           "type": "webview",
-          "id": "dsh.chatView",
-          "name": "Chat",
+          "id": "dsh.launcher",
+          "name": "Launcher",
           "contextualTitle": "DeepSeek Harness"
         }
       ]
