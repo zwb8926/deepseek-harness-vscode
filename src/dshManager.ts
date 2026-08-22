@@ -18,11 +18,18 @@
  */
 
 import { spawn, ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+
+// Shared split-panel adapter shipped next to out/ (see panel-inject.js).
+// The injected script reads ?dshPanel=sidebar|center and adapts the GUI.
+const { PANEL_MARKER, PANEL_INJECT } = require("../panel-inject.js") as {
+  PANEL_MARKER: string;
+  PANEL_INJECT: string;
+};
 
 export type DshState =
   | "idle"
@@ -39,6 +46,9 @@ export interface DshRuntimeInfo {
   url?: string;
   /** True when the server was adopted (we do not own the process). */
   external?: boolean;
+  /** True when the served frontend understands ?dshPanel=sidebar|center
+   * (split-panel mode). False → the UI falls back to the full GUI. */
+  panelSupport?: boolean;
   /** Human-readable detail, usually an error message. */
   detail?: string;
   /** The current VS Code project directory resolved at click time. */
@@ -130,6 +140,7 @@ export class DshManager {
   private state: DshState = "idle";
   private url?: string;
   private external = false;
+  private panelSupport?: boolean;
   private detail?: string;
   private project?: string;
   private disposed = false;
@@ -154,6 +165,7 @@ export class DshManager {
       state: this.state,
       url: this.url,
       external: this.external,
+      panelSupport: this.panelSupport,
       detail: this.detail,
       project: this.project
     };
@@ -232,6 +244,79 @@ export class DshManager {
   private async isDshServer(url: string): Promise<boolean> {
     const body = await this.fetchRoot(url);
     return body !== undefined && body.includes("__DSH_BOOT__");
+  }
+
+  // ------------------------------------------------------- split-panel mode
+
+  /**
+   * Make sure the served frontend supports ?dshPanel=sidebar|center.
+   *
+   * The bundled install is patched at build time; adopted servers (e.g. an
+   * `npx dsh web` running from the npm cache) are patched here on disk — the
+   * frontend-static server re-reads index.html on every request, so the patch
+   * takes effect without a restart. Returns whether the split UI can be used.
+   */
+  private async ensurePanelSupport(url: string): Promise<boolean> {
+    try {
+      const probe = url + "/?dshPanel=sidebar";
+      const body = await this.fetchRoot(probe);
+      if (body !== undefined && body.includes(PANEL_MARKER)) {
+        this.opts.log("panel: frontend supports split panels (marker found)");
+        return true;
+      }
+      const indexFiles = await this.findFrontendIndexFiles();
+      let patchedAny = false;
+      for (const file of indexFiles) {
+        if (patchFrontendIndexFile(file, (line) => this.opts.log(line))) patchedAny = true;
+      }
+      if (patchedAny) {
+        const again = await this.fetchRoot(probe);
+        if (again !== undefined && again.includes(PANEL_MARKER)) {
+          this.opts.log("panel: frontend patched — split panels enabled");
+          return true;
+        }
+      }
+      this.opts.log("panel: frontend has no split-panel support and could not be patched — full-GUI fallback");
+      return false;
+    } catch (err) {
+      this.opts.log(`panel: support check failed: ${String(err)} — full-GUI fallback`);
+      return false;
+    }
+  }
+
+  /** Candidate dsh-web-frontend dist index.html files on disk, best effort. */
+  private async findFrontendIndexFiles(): Promise<string[]> {
+    const files: string[] = [];
+    const push = (p: string | undefined): void => {
+      if (p !== undefined && existsSync(p)) files.push(p);
+    };
+    // 1. The extension-bundled install (normally already patched at build time).
+    push(path.join(__dirname, "..", "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+    // 2. The auto-install / auto-update directory in the extension storage.
+    if (this.opts.autoInstallDir !== undefined) {
+      push(path.join(this.opts.autoInstallDir, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+    }
+    // 3. A global npm install.
+    const globalRoot = await npmGlobalRoot();
+    if (globalRoot !== undefined) {
+      push(path.join(globalRoot, "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+    }
+    // 4. The npm npx cache — the usual home of an adopted `npx dsh web` server.
+    const npxRoot =
+      process.platform === "win32"
+        ? path.join(os.homedir(), "AppData", "Local", "npm-cache", "_npx")
+        : path.join(os.homedir(), ".npm", "_npx");
+    try {
+      if (existsSync(npxRoot)) {
+        for (const entry of readdirSync(npxRoot, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          push(path.join(npxRoot, entry.name, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+        }
+      }
+    } catch (err) {
+      this.opts.log(`panel: npx cache scan failed: ${String(err)}`);
+    }
+    return files;
   }
 
   /** POST one /api RPC envelope; returns the parsed response value or undefined. */
@@ -364,6 +449,7 @@ export class DshManager {
         this.external = true;
         this.url = candidate;
         this.everRan = true;
+        this.panelSupport = await this.ensurePanelSupport(candidate);
         this.setState("running");
         return;
       }
@@ -373,6 +459,7 @@ export class DshManager {
     // 2. Resolve the CLI.
     this.external = false;
     this.url = undefined;
+    this.panelSupport = undefined;
     this.setState("locating");
     const cli = await this.resolveCli();
     if (cli === undefined) {
@@ -473,6 +560,7 @@ export class DshManager {
         const ok = await this.isDshServer(url);
         if (ok) {
           this.autoRestartCount = 0;
+          this.panelSupport = await this.ensurePanelSupport(url);
           this.setState("running");
           return;
         }
@@ -767,6 +855,34 @@ function readPackageVersion(pkgJsonPath: string): string | undefined {
     return typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Inject the split-panel adapter into one index.html string.
+ * @returns the patched HTML, or undefined when it already carries the marker.
+ */
+export function injectPanelSupport(html: string): string | undefined {
+  if (html.includes(PANEL_MARKER)) return undefined;
+  const headClose = html.indexOf("</head>");
+  if (headClose < 0) return undefined;
+  return html.slice(0, headClose) + PANEL_INJECT + "\n  " + html.slice(headClose);
+}
+
+/**
+ * Patch one dsh-web-frontend dist/index.html on disk (idempotent).
+ * @returns true when this call modified the file.
+ */
+export function patchFrontendIndexFile(file: string, log?: (line: string) => void): boolean {
+  try {
+    const next = injectPanelSupport(readFileSync(file, "utf8"));
+    if (next === undefined) return false;
+    writeFileSync(file, next);
+    log?.(`panel: patched ${file}`);
+    return true;
+  } catch (err) {
+    log?.(`panel: could not patch ${file}: ${String(err)}`);
+    return false;
   }
 }
 

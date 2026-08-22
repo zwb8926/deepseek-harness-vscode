@@ -28,6 +28,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(statusBar);
 
   const autoInstallDir = path.join(context.globalStorageUri.fsPath, "dsh-cli");
+  let panelAutoOpened = false;
 
   const manager = new DshManager({
     port: 3080,
@@ -43,6 +44,14 @@ export function activate(context: vscode.ExtensionContext): void {
       panel.update(info);
       launcher.update(info);
       if (info.state === "running" && info.url !== undefined) {
+        // 2.0.0: the chat lives in the editor tab and the sidebar column in
+        // the launcher — open the editor tab once the server is up.
+        if (!panelAutoOpened) {
+          panelAutoOpened = true;
+          if (getCfg("autoStart", true)) {
+            panel.open();
+          }
+        }
         void syncTheme();
       }
     },
@@ -114,48 +123,11 @@ export function activate(context: vscode.ExtensionContext): void {
     await manager.start();
   }
 
-  /**
-   * 打开DSH：取当前项目路径 → 查该项目的会话 → 有则打开。
-   * 不自动新建会话（新建由 GUI 内的"新建会话"入口完成）。
-   */
-  async function openOrCreateSession(): Promise<void> {
-    if (!manager.running) {
-      await ensureStarted();
-    }
-    if (!manager.running) return; // start failed; the error state explains why
-    // Resolve the current VS Code project AT CLICK TIME and surface it.
+  /** Surface the current VS Code project in the launcher (📁 path). */
+  function refreshProject(): void {
     const project = workspaceCwd();
     manager.setProject(project);
     log(`workspaceCwd: ${project}`);
-
-    // 1. Adopt/create the workspace record for the project (grouping only,
-    //    never creates a session).
-    const workspaceId = await manager.ensureWorkspace(project);
-
-    // 2. Look at existing sessions bound to this project; open the newest.
-    let target: string | undefined;
-    if (workspaceId !== undefined) {
-      const ws = (await manager.listWorkspaces())?.find((w) => w.workspaceId === workspaceId);
-      if (ws !== undefined && ws.sessionIds.length > 0) {
-        const summaries = (await manager.listSessions()) ?? [];
-        const candidates = summaries.filter((s) => ws.sessionIds.includes(s.sessionId) || s.cwd === project);
-        const best = [...candidates].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-        target = best?.sessionId;
-      }
-    }
-
-    if (target !== undefined) {
-      log(`opening existing session: ${target} (workspace: ${project})`);
-    } else {
-      log(`no existing session for ${project} — opening the panel without creating one`);
-    }
-
-    panel.open();
-    panel.reload();
-
-    // Verification: log the real workspace records so failures are visible.
-    const workspaces = await manager.listWorkspaces();
-    log(`workspace.list: ${JSON.stringify(workspaces?.map((w) => ({ title: w.title, path: w.path, sessions: w.sessionIds.length })))}`);
   }
 
   function isDarkTheme(): boolean {
@@ -172,9 +144,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
-      case "new-session":
-        await openOrCreateSession();
-        break;
       case "open-chat":
         await openChatInEditor();
         break;
@@ -279,8 +248,14 @@ export function activate(context: vscode.ExtensionContext): void {
       void syncTheme();
       panel.reload();
       launcher.reload();
+    }),
+    // Keep the launcher's project line in sync with the active editor.
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      refreshProject();
     })
   );
+
+  refreshProject();
 
   // Auto-start after startup when enabled, so the UI is live right away.
   if (getCfg("autoStart", true)) {
