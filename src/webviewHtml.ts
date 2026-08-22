@@ -100,11 +100,17 @@ export function shellHtml(body: string, dark: boolean): string {
   // The embedded GUI iframe (sidebar panel) reports session picks and
   // settings requests — open or reveal the editor tab so the conversation /
   // settings are visible.
+  //
+  // We only need to gate on data.source (the iframe runs panel-inject.js
+  // which sets that field). Checking e.source against the current
+  // frame.contentWindow is unreliable: when the launcher HTML is
+  // re-rendered (e.g. on a state transition), the old frame reference
+  // in this closure becomes stale, and messages from the new iframe
+  // are dropped. Trust the message tag — only the panel-inject script
+  // ever sets source = "dsh-vscode-panel".
   window.addEventListener("message", function (e) {
     const data = e.data;
     if (data === null || typeof data !== "object" || data.source !== "dsh-vscode-panel") return;
-    const frame = document.querySelector("iframe");
-    if (frame === null || e.source !== frame.contentWindow) return;
     if (data.type === "session-selected") vscode.postMessage({ type: "open-chat" });
     else if (data.type === "settings-selected") vscode.postMessage({ type: "open-settings" });
   });
