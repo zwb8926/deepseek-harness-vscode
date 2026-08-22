@@ -8,11 +8,10 @@
 // servers). It reads `?dshPanel=sidebar|center` and adapts the AppFrame
 // three-column grid with CSS only:
 //
-//   - sidebar: keep only the sidebar column and force the frame to the wide
-//     breakpoint (SIDEBAR_AUTO_COLLAPSE = 1024px) so the sidebar renders
-//     expanded instead of collapsing to the 56px rail in a narrow viewport.
-//     The sidebar's own collapse/expand toggle (the rail chevron at the top
-//     right) is hidden — the launcher is always expanded.
+//   - sidebar: drop the center and details columns, hide the sidebar's own
+//     collapse/expand toggle (the launcher is always expanded), and let the
+//     sidebar column fill the iframe width so it tracks the VS Code sidebar
+//     as the user drags its edge.
 //   - center: drop the sidebar column (and its drag handle) and let the
 //     conversation span tracks 1-2; the details column keeps its live width
 //     on track 3. The sidebar column is kept in the DOM (off-screen, hidden,
@@ -53,9 +52,30 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     'html[data-dsh-panel="sidebar"] [class*="centerCol"],' +
     'html[data-dsh-panel="sidebar"] [class*="detailsCol"],' +
     'html[data-dsh-panel="sidebar"] [class$="_frame"] > [class$="_handle"],' +
-    'html[data-dsh-panel="sidebar"] button:has([class$="_railMark"])' +
-      ' { display: none !important; }' +
-    'html[data-dsh-panel="sidebar"] [class$="_frame"] { min-width: 1024px !important; }' +
+    // The dsh sidebar has a "收起侧边栏 / 展开侧边栏" toggle (class
+    // hHd-Xa_toggle in 0.1.1-rc.2). In sidebar mode the extension owns
+    // the rail, so hide every variant of the toggle.
+    'html[data-dsh-panel="sidebar"] button[aria-label="收起侧边栏"],' +
+    'html[data-dsh-panel="sidebar"] button[aria-label="展开侧边栏"],' +
+    'html[data-dsh-panel="sidebar"] [class*="_toggle"] { display: none !important; }' +
+    // The dsh AppFrame is a 3-column grid (sidebar | center | details)
+    // with a hard min-width of 1024px and a fixed 280px sidebar column.
+    // In sidebar mode the launcher is a single column that has to track
+    // the VS Code sidebar's width: override the frame and the sidebar
+    // column to fill 100% of the iframe. Also kill the min-width so a
+    // narrow launcher (e.g. 200px) does not get a horizontal scrollbar.
+    'html[data-dsh-panel="sidebar"] [class$="_frame"] {' +
+      ' display: block !important;' +
+      ' width: 100% !important;' +
+      ' min-width: 0 !important;' +
+      ' max-width: 100% !important;' +
+      ' grid-template-columns: 100% !important;' +
+    '}' +
+    'html[data-dsh-panel="sidebar"] [class*="sidebarCol"] {' +
+      ' width: 100% !important;' +
+      ' min-width: 0 !important;' +
+      ' max-width: 100% !important;' +
+    '}' +
     'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }' +
     'html[data-dsh-panel="center"] [class*="sidebarCol"] {' +
       ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
