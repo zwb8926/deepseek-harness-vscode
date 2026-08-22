@@ -162,7 +162,7 @@
     "watch": "tsc -watch -p ./",
     "patch-frontend": "node scripts/patch-frontend.mjs",
     "vscode:prepublish": "npm run compile && npm run patch-frontend",
-    "package": "vsce package --out DSH-for-VS-Code.vsix",
+    "package": "vsce package --out DSH-for-VS-Code-2026.8.22.vsix",
     "smoke": "npm run compile && npm run patch-frontend && node out/smoke.js"
   },
   "dependencies": {
