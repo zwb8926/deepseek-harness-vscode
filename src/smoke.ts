@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DshManager, compareVersions } from "./dshManager";
+import { DshManager, compareVersions, injectPanelSupport } from "./dshManager";
 
 interface Cli {
   cliPath?: string;
@@ -107,6 +107,7 @@ async function scenarioAdopt(cliPath: string | undefined): Promise<void> {
   });
   await second.start();
   check("second manager adopts the running server", second.info.state === "running" && second.info.external === true, `state=${second.info.state} external=${second.info.external}`);
+  check("adopted server supports split panels", second.info.panelSupport === true, `panelSupport=${second.info.panelSupport}`);
 
   await second.stop();
   check("stopping the adopter leaves the server alive", first.info.state === "running", `first state=${first.info.state}`);
@@ -201,6 +202,18 @@ async function main(): Promise<void> {
     await manager.stop();
     process.exit(1);
   }
+
+  console.log("— split panels —");
+  check("frontend supports split panels", manager.info.panelSupport === true, `panelSupport=${manager.info.panelSupport}`);
+  const side = await httpJson("GET", url + "/?dshPanel=sidebar");
+  check("GET /?dshPanel=sidebar → 200", side.status === 200, `status=${side.status}`);
+  check("sidebar panel page carries the marker", side.text.includes("dsh-vscode-panel"), "panel marker missing");
+  const center = await httpJson("GET", url + "/?dshPanel=center");
+  check("GET /?dshPanel=center → 200", center.status === 200, `status=${center.status}`);
+  check("center panel page carries the marker", center.text.includes("dsh-vscode-panel"), "panel marker missing");
+  const injected = injectPanelSupport("<html><head></head></html>");
+  check("injectPanelSupport injects once", injected !== undefined && (injected as string).includes("dsh-vscode-panel"), "inject failed");
+  check("injectPanelSupport is idempotent", injectPanelSupport(injected as string) === undefined, "second inject should be skipped");
 
   console.log("— wire —");
   const root = await httpJson("GET", url + "/");

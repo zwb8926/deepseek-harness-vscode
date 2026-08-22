@@ -16,7 +16,13 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private lastInfo?: DshRuntimeInfo;
 
-  constructor(private readonly onAction: (action: PanelAction) => void) {}
+  constructor(
+    private readonly onAction: (action: PanelAction) => void,
+    /** Invoked whenever the launcher becomes visible — lets the extension
+     *  re-probe the port (adopt-or-start) instead of staying stuck on a stale
+     *  "服务未运行" state. */
+    private readonly onOpen?: () => void
+  ) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -33,6 +39,7 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
       this.view = undefined;
     });
     this.render();
+    this.onOpen?.();
   }
 
   update(info?: DshRuntimeInfo): void {

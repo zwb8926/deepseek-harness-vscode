@@ -28,9 +28,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(statusBar);
 
   const autoInstallDir = path.join(context.globalStorageUri.fsPath, "dsh-cli");
+  let panelAutoOpened = false;
 
   const manager = new DshManager({
-    port: getCfg("port", 0),
+    port: 3080,
     home: getCfg("home", ""),
     cliPath: getCfg("cliPath", ""),
     cwd: workspaceCwd(),
@@ -38,11 +39,28 @@ export function activate(context: vscode.ExtensionContext): void {
     autoInstall: getCfg("autoInstall", true),
     autoInstallDir,
     autoRestart: getCfg("autoRestart", true),
+    watchExternal: getCfg("autoStart", true),
     onInfo: (info) => {
       renderStatus(info);
       panel.update(info);
       launcher.update(info);
       if (info.state === "running" && info.url !== undefined) {
+        // 把当前 VS Code 项目注册为 dsh workspace（workspace.create 幂等，
+        // 不创建会话）——侧栏的 workspace 分组立即可见该项目。
+        void ensureProjectWorkspace();
+        // Editor tab auto-open (Claude-style), once per activation. This is a
+        // UI affordance and does NOT depend on dsh.autoStart (that setting
+        // only controls the server lifecycle); a failure retries on the next
+        // running transition.
+        if (!panelAutoOpened) {
+          panelAutoOpened = true;
+          try {
+            panel.open();
+          } catch (err) {
+            log(`auto-open chat panel failed: ${String(err)}`);
+            panelAutoOpened = false;
+          }
+        }
         void syncTheme();
       }
     },
@@ -58,9 +76,19 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Activity-bar whale icon → sidebar panel with session controls; the chat
   // itself always opens as a full editor tab.
-  const launcher = new LauncherViewProvider((action: PanelAction) => {
-    void handlePanelAction(action);
-  });
+  const launcher = new LauncherViewProvider(
+    (action: PanelAction) => {
+      void handlePanelAction(action);
+    },
+    // Whenever the launcher becomes visible (e.g. right after VS Code opens),
+    // re-attempt adopt-or-start so the sidebar never stays stuck on
+    // "服务未运行" while a dsh server is reachable on port 3080.
+    () => {
+      if (getCfg("autoStart", true) && !manager.running) {
+        void ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
+      }
+    }
+  );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcher, {
       webviewOptions: { retainContextWhenHidden: true }
@@ -98,12 +126,13 @@ export function activate(context: vscode.ExtensionContext): void {
   /** Refresh spawn-relevant options from settings before a start. */
   function syncOptions(): void {
     manager.configure({
-      port: getCfg("port", 0),
+      port: 3080,
       home: getCfg("home", ""),
       cliPath: getCfg("cliPath", ""),
       extraArgs: getCfg("extraArgs", []),
       preferNewer: getCfg("preferNewer", true),
       autoUpdate: getCfg("autoUpdate", true),
+      watchExternal: getCfg("autoStart", true),
       cwd: workspaceCwd()
     });
   }
@@ -114,54 +143,26 @@ export function activate(context: vscode.ExtensionContext): void {
     await manager.start();
   }
 
-  /**
-   * 打开DSH：取当前项目路径 → 查该项目的会话 → 有则打开，没有才新建。
-   * The GUI boots into the persisted selection or the most recent workspace,
-   * so the target session is chosen as the project's most recently updated.
-   */
-  async function openOrCreateSession(): Promise<void> {
-    if (!manager.running) {
-      await ensureStarted();
-    }
-    if (!manager.running) return; // start failed; the error state explains why
-    // Resolve the current VS Code project AT CLICK TIME and surface it.
+  /** Surface the current VS Code project in the launcher (📁 path). */
+  function refreshProject(): void {
     const project = workspaceCwd();
     manager.setProject(project);
     log(`workspaceCwd: ${project}`);
+  }
 
-    // 1. Adopt/create the workspace record for the project.
+  /** Register the current VS Code project as a dsh workspace once the server
+   *  is up. workspace.create is idempotent and creates no session; the GUI
+   *  sidebar then shows the project group immediately, and sessions created
+   *  from it are bound to the project directory (session.header.cwd). */
+  let registeredProject = "";
+  async function ensureProjectWorkspace(): Promise<void> {
+    const project = workspaceCwd();
+    if (project === "" || project === registeredProject) return;
     const workspaceId = await manager.ensureWorkspace(project);
-
-    // 2. Look at existing sessions bound to this project.
-    let target: string | undefined;
     if (workspaceId !== undefined) {
-      const ws = (await manager.listWorkspaces())?.find((w) => w.workspaceId === workspaceId);
-      if (ws !== undefined && ws.sessionIds.length > 0) {
-        const summaries = (await manager.listSessions()) ?? [];
-        const candidates = summaries.filter((s) => ws.sessionIds.includes(s.sessionId) || s.cwd === project);
-        const best = [...candidates].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-        target = best?.sessionId;
-      }
+      registeredProject = project;
+      log(`project workspace ready: ${project} -> ${workspaceId}`);
     }
-
-    // 3. None exists — create one bound to the project.
-    if (target === undefined) {
-      target = await manager.createSessionInWorkspace(project);
-      log(`created session: ${target ?? "?"} (workspace: ${project})`);
-    } else {
-      log(`opening existing session: ${target} (workspace: ${project})`);
-    }
-
-    if (target === undefined) {
-      void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
-      return;
-    }
-    panel.open();
-    panel.reload();
-
-    // Verification: log the real workspace records so failures are visible.
-    const workspaces = await manager.listWorkspaces();
-    log(`workspace.list: ${JSON.stringify(workspaces?.map((w) => ({ title: w.title, path: w.path, sessions: w.sessionIds.length })))}`);
   }
 
   function isDarkTheme(): boolean {
@@ -178,10 +179,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
-      case "new-session":
-        await openOrCreateSession();
-        break;
       case "open-chat":
+      case "open-settings":
         await openChatInEditor();
         break;
       case "start":
@@ -285,8 +284,14 @@ export function activate(context: vscode.ExtensionContext): void {
       void syncTheme();
       panel.reload();
       launcher.reload();
+    }),
+    // Keep the launcher's project line in sync with the active editor.
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      refreshProject();
     })
   );
+
+  refreshProject();
 
   // Auto-start after startup when enabled, so the UI is live right away.
   if (getCfg("autoStart", true)) {

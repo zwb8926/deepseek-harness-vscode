@@ -10,7 +10,7 @@
 import type { DshRuntimeInfo } from "./dshManager";
 
 export interface PanelAction {
-  type: "new-session" | "open-chat" | "open-browser" | "start" | "stop" | "restart" | "reload" | "show-logs";
+  type: "new-session" | "open-chat" | "open-settings" | "open-browser" | "start" | "stop" | "restart" | "reload" | "show-logs";
 }
 
 const CSP = [
@@ -58,16 +58,20 @@ button {
 button:hover { background: var(--vscode-button-hoverBackground); }
 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
 button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-.launcher { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
-.launcher h1 { font-size: 13px; margin: 0; }
-.launcher button.primary { padding: 8px 0; font-weight: 600; }
+.launcher { display: flex; flex-direction: column; height: 100%; }
+.launcher iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--vscode-editor-background); }
 .launcher .status {
-  font-size: 11px; line-height: 1.5; padding: 6px 8px; border-radius: 6px;
+  flex: none; font-size: 11px; line-height: 1.5; padding: 6px 8px; border-radius: 0;
+  border-top: 1px solid var(--vscode-widget-border, transparent);
   background: var(--vscode-textBlockQuote-background);
-  border: 1px solid var(--vscode-widget-border, transparent);
   color: var(--vscode-descriptionForeground);
   word-break: break-all;
 }
+.launcher .hint {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 10px; text-align: center; padding: 16px;
+}
+.launcher .hint h1 { font-size: 13px; margin: 0; }
 `;
 
 export function shellHtml(body: string, dark: boolean): string {
@@ -93,6 +97,17 @@ export function shellHtml(body: string, dark: boolean): string {
       vscode.postMessage({ type: b.getAttribute("data-cmd") });
     });
   });
+  // The embedded GUI iframe (sidebar panel) reports session picks and
+  // settings requests — open or reveal the editor tab so the conversation /
+  // settings are visible.
+  window.addEventListener("message", function (e) {
+    const data = e.data;
+    if (data === null || typeof data !== "object" || data.source !== "dsh-vscode-panel") return;
+    const frame = document.querySelector("iframe");
+    if (frame === null || e.source !== frame.contentWindow) return;
+    if (data.type === "session-selected") vscode.postMessage({ type: "open-chat" });
+    else if (data.type === "settings-selected") vscode.postMessage({ type: "open-settings" });
+  });
 })();
 </script>
 </body>
@@ -115,7 +130,25 @@ function placeholderHtml(title: string, detail: string): string {
 </div>`;
 }
 
-/** Sidebar panel: one button to create & open a session, plus server status. */
+/** The iframe sandbox/allow attributes the embedded GUI needs (same-origin
+ * inside the iframe, so the browser-trust fence passes and localStorage is
+ * shared between the launcher and the editor on the dsh origin). */
+const IFRAME_ATTRS =
+  'sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"' +
+  ' allow="clipboard-read; clipboard-write"';
+
+function guiIframeHtml(src: string, title: string): string {
+  return `<iframe title="${title}" src="${escapeHtml(src)}" ${IFRAME_ATTRS}></iframe>`;
+}
+
+/** Split-panel iframe source for one panel mode, when the frontend supports it. */
+function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean): string {
+  if (!supported) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}dshPanel=${panel}`;
+}
+
+/** Sidebar panel: the GUI's own sidebar column (sessions / workspaces). */
 export function launcherBody(info?: DshRuntimeInfo): string {
   const status =
     info?.state === "running" && info.url !== undefined
@@ -125,9 +158,41 @@ export function launcherBody(info?: DshRuntimeInfo): string {
     info?.project !== undefined && info.project !== ""
       ? `<div class="status">📁 ${escapeHtml(info.project)}</div>`
       : "";
+  if (info?.state === "running" && info.url !== undefined) {
+    if (info.panelSupport === false) {
+      return `<div class="launcher">
+  <div class="hint">
+    <h1>DeepSeek Harness</h1>
+    <p>当前 dsh 前端不支持拆分面板（缺少 split-panel 补丁）。请更新 dsh 或检查日志。</p>
+    <p><code>${escapeHtml(info.url)}</code></p>
+  </div>
+  ${project}
+  ${status}
+</div>`;
+    }
+    const src = panelSrc(info.url, "sidebar", true);
+    return `<div class="launcher">
+  ${guiIframeHtml(src, "DeepSeek Harness — sessions")}
+  ${project}
+  ${status}
+</div>`;
+  }
+  const hintText =
+    info?.state === "error"
+      ? `启动失败：${escapeHtml(info.detail ?? "未知错误")}`
+      : info?.state === "locating" || info?.state === "starting" || info?.state === "installing"
+        ? "服务正在启动…"
+        : "服务未运行。";
+  const hintActions =
+    info?.state === "error" || info?.state === "stopped" || info?.state === undefined || info?.state === "idle"
+      ? actionsHtml([["start", "启动服务"], ["open-browser", "浏览器打开"], ["show-logs", "查看日志"]])
+      : "";
   return `<div class="launcher">
-  <h1>DeepSeek Harness</h1>
-  <button class="primary" data-cmd="new-session">打开DSH</button>
+  <div class="hint">
+    <h1>DeepSeek Harness</h1>
+    <p>${hintText}</p>
+    ${hintActions}
+  </div>
   ${project}
   ${status}
 </div>`;
@@ -157,9 +222,10 @@ export function stateBody(info?: DshRuntimeInfo): string {
   switch (info?.state) {
     case "running": {
       const url = info.url ?? "";
-      return `<iframe title="DeepSeek Harness" src="${escapeHtml(url)}"
-        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock"
-        allow="clipboard-read; clipboard-write"></iframe>`;
+      // Editor area = the GUI's center column (conversation + details), no
+      // sidebar. Full GUI when the frontend lacks split-panel support.
+      const src = panelSrc(url, "center", info.panelSupport !== false);
+      return guiIframeHtml(src, "DeepSeek Harness");
     }
     case "locating":
       return placeholderHtml("Locating the dsh CLI…", "The extension is looking for an existing dsh installation (bundled, PATH, global npm).");

@@ -1,8 +1,8 @@
 {
   "name": "deepseekharness-for-vscode",
   "displayName": "DeepSeekHarness for VS Code",
-  "description": "DeepSeek Harness inside VS Code: auto-starts the dsh web server and opens the full chat/session/tool/approval UI as an editor tab (Claude-style), with start/stop control, status bar, and open-in-browser.",
-  "version": "1.2.1",
+  "description": "DeepSeek Harness inside VS Code: auto-starts (or adopts) the dsh web server, shows the sessions/workspaces sidebar column in the side bar and the chat (conversation + details) as an editor tab (Claude-style), with start/stop control, status bar, and open-in-browser.",
+  "version": "2026.8.22",
   "publisher": "zwb8926",
   "icon": "media/dsh-icon-outline.png",
   "license": "MIT",
@@ -101,13 +101,6 @@
     "configuration": {
       "title": "DeepSeek Harness",
       "properties": {
-        "dsh.port": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "maximum": 65535,
-          "markdownDescription": "内嵌 dsh 服务端口。**默认 `0` = 每次启动由系统随机分配**：全新端口 = 全新浏览器 origin，GUI 不会继承浏览器里持久化的旧会话选中，启动时自动打开最新工作区（当前项目）。如果你显式设置了端口（如 3080），且该端口已有 dsh 服务，扩展会接管它（注意：固定端口会复用浏览器 localStorage 的会话选中，可能不会自动切到当前项目工作区）。"
-        },
         "dsh.home": {
           "type": "string",
           "default": "",
@@ -167,12 +160,13 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "vscode:prepublish": "npm run compile",
-    "package": "vsce package --out DSH-for-VS-Code.vsix",
-    "smoke": "npm run compile && node out/smoke.js"
+    "patch-frontend": "node scripts/patch-frontend.mjs",
+    "vscode:prepublish": "npm run compile && npm run patch-frontend",
+    "package": "vsce package --out DSH-for-VS-Code-2026.8.22.vsix",
+    "smoke": "npm run compile && npm run patch-frontend && node out/smoke.js"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "^0.1.0-rc.7"
+    "@deepseek-ai/dsh": "0.1.1-rc.2"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

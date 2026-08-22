@@ -18,11 +18,19 @@
  */
 
 import { spawn, ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+
+// Shared split-panel adapter shipped next to out/ (see panel-inject.js).
+// The injected script reads ?dshPanel=sidebar|center and adapts the GUI.
+const { PANEL_MARKER, PANEL_INJECT, injectPanelSupportHtml } = require("../panel-inject.js") as {
+  PANEL_MARKER: string;
+  PANEL_INJECT: string;
+  injectPanelSupportHtml: (html: string) => string | null;
+};
 
 export type DshState =
   | "idle"
@@ -39,6 +47,9 @@ export interface DshRuntimeInfo {
   url?: string;
   /** True when the server was adopted (we do not own the process). */
   external?: boolean;
+  /** True when the served frontend understands ?dshPanel=sidebar|center
+   * (split-panel mode). False → the UI falls back to the full GUI. */
+  panelSupport?: boolean;
   /** Human-readable detail, usually an error message. */
   detail?: string;
   /** The current VS Code project directory resolved at click time. */
@@ -61,6 +72,10 @@ export interface DshOptions {
   autoInstallDir?: string;
   /** Restart once after an unexpected exit. */
   autoRestart?: boolean;
+  /** When an adopted external server disappears (e.g. a `dsh web` started in
+   * a terminal is stopped), keep probing the port and re-adopt automatically
+   * when it comes back (default true). Only adopts; never spawns. */
+  watchExternal?: boolean;
   /** When true, among the found dsh installs pick the newest version (default true). */
   preferNewer?: boolean;
   /** When true (and preferNewer), check the npm registry on start and auto-install a newer @deepseek-ai/dsh. */
@@ -80,6 +95,10 @@ const HEALTH_TIMEOUT_MS = 60_000;
 const HEALTH_INTERVAL_MS = 400;
 const RESTART_DELAY_MS = 2_000;
 const MAX_AUTO_RESTARTS = 2;
+/** Health watch: how often the running server is probed. */
+const WATCH_INTERVAL_MS = 5_000;
+/** Consecutive failed probes before the server is declared dead. */
+const WATCH_FAILURES_TO_DIE = 2;
 
 /**
  * Compare two dsh version strings (semver-ish, e.g. "0.1.0-rc.7").
@@ -130,6 +149,7 @@ export class DshManager {
   private state: DshState = "idle";
   private url?: string;
   private external = false;
+  private panelSupport?: boolean;
   private detail?: string;
   private project?: string;
   private disposed = false;
@@ -139,13 +159,26 @@ export class DshManager {
   private restartTimer?: NodeJS.Timeout;
   private startedAt = 0;
   private everRan = false;
+  /** Health watch: probes the running server; detects when an adopted
+   * external server dies. */
+  private watchTimer?: NodeJS.Timeout;
+  private healthFailures = 0;
+  /** True while the manager waits for a disappeared external server to return. */
+  private awaitingExternal = false;
 
   constructor(opts: DshOptions) {
     this.opts = opts;
+    this.watchTimer = setInterval(() => {
+      void this.watchTick().catch(() => {
+        /* probe errors are handled inside watchTick */
+      });
+    }, WATCH_INTERVAL_MS);
+    // Do not keep a headless process alive just for the watch.
+    this.watchTimer.unref?.();
   }
 
   /** Update spawn-relevant options (applied on the next start). */
-  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "autoUpdate">>): void {
+  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "autoUpdate" | "watchExternal">>): void {
     Object.assign(this.opts, partial);
   }
 
@@ -154,6 +187,7 @@ export class DshManager {
       state: this.state,
       url: this.url,
       external: this.external,
+      panelSupport: this.panelSupport,
       detail: this.detail,
       project: this.project
     };
@@ -232,6 +266,89 @@ export class DshManager {
   private async isDshServer(url: string): Promise<boolean> {
     const body = await this.fetchRoot(url);
     return body !== undefined && body.includes("__DSH_BOOT__");
+  }
+
+  // ------------------------------------------------------- split-panel mode
+
+  /**
+   * Make sure the served frontend supports ?dshPanel=sidebar|center.
+   *
+   * The bundled install is patched at build time; adopted servers (e.g. an
+   * `npx dsh web` running from the npm cache) are patched here on disk — the
+   * frontend-static server re-reads index.html on every request, so the patch
+   * takes effect without a restart. Returns whether the split UI can be used.
+   */
+  private async ensurePanelSupport(url: string): Promise<boolean> {
+    try {
+      const probe = url + "/?dshPanel=sidebar";
+      const body = await this.fetchRoot(probe);
+      if (body !== undefined && body.includes(PANEL_MARKER)) {
+        if (!body.includes(PANEL_INJECT)) {
+          // Split view works, but the served adapter predates the
+          // session-click coordination — best-effort upgrade of the frontend
+          // files on disk (the server re-reads index.html per request, so a
+          // later probe picks it up without a restart).
+          this.opts.log("panel: served adapter is outdated — upgrading frontend files");
+          for (const file of await this.findFrontendIndexFiles()) {
+            patchFrontendIndexFile(file, (line) => this.opts.log(line));
+          }
+        }
+        this.opts.log("panel: frontend supports split panels (marker found)");
+        return true;
+      }
+      const indexFiles = await this.findFrontendIndexFiles();
+      let patchedAny = false;
+      for (const file of indexFiles) {
+        if (patchFrontendIndexFile(file, (line) => this.opts.log(line))) patchedAny = true;
+      }
+      if (patchedAny) {
+        const again = await this.fetchRoot(probe);
+        if (again !== undefined && again.includes(PANEL_MARKER)) {
+          this.opts.log("panel: frontend patched — split panels enabled");
+          return true;
+        }
+      }
+      this.opts.log("panel: frontend has no split-panel support and could not be patched — full-GUI fallback");
+      return false;
+    } catch (err) {
+      this.opts.log(`panel: support check failed: ${String(err)} — full-GUI fallback`);
+      return false;
+    }
+  }
+
+  /** Candidate dsh-web-frontend dist index.html files on disk, best effort. */
+  private async findFrontendIndexFiles(): Promise<string[]> {
+    const files: string[] = [];
+    const push = (p: string | undefined): void => {
+      if (p !== undefined && existsSync(p)) files.push(p);
+    };
+    // 1. The extension-bundled install (normally already patched at build time).
+    push(path.join(__dirname, "..", "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+    // 2. The auto-install / auto-update directory in the extension storage.
+    if (this.opts.autoInstallDir !== undefined) {
+      push(path.join(this.opts.autoInstallDir, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+    }
+    // 3. A global npm install.
+    const globalRoot = await npmGlobalRoot();
+    if (globalRoot !== undefined) {
+      push(path.join(globalRoot, "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+    }
+    // 4. The npm npx cache — the usual home of an adopted `npx dsh web` server.
+    const npxRoot =
+      process.platform === "win32"
+        ? path.join(os.homedir(), "AppData", "Local", "npm-cache", "_npx")
+        : path.join(os.homedir(), ".npm", "_npx");
+    try {
+      if (existsSync(npxRoot)) {
+        for (const entry of readdirSync(npxRoot, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          push(path.join(npxRoot, entry.name, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+        }
+      }
+    } catch (err) {
+      this.opts.log(`panel: npx cache scan failed: ${String(err)}`);
+    }
+    return files;
   }
 
   /** POST one /api RPC envelope; returns the parsed response value or undefined. */
@@ -364,6 +481,9 @@ export class DshManager {
         this.external = true;
         this.url = candidate;
         this.everRan = true;
+        this.awaitingExternal = false;
+        this.autoRestartCount = 0;
+        this.panelSupport = await this.ensurePanelSupport(candidate);
         this.setState("running");
         return;
       }
@@ -371,8 +491,15 @@ export class DshManager {
     }
 
     // 2. Resolve the CLI.
+    // Preserve awaitingExternal here: if the spawn path below fails (port
+    // TIME_WAIT, EADDRINUSE, missing module, …) the watch must keep
+    // re-probing the configured port, otherwise a recovered external
+    // server (or a port that becomes free later) would never be picked up
+    // again. The flag is cleared only when the spawn actually succeeds
+    // (see below, after the child is bound to the URL).
     this.external = false;
     this.url = undefined;
+    this.panelSupport = undefined;
     this.setState("locating");
     const cli = await this.resolveCli();
     if (cli === undefined) {
@@ -391,12 +518,21 @@ export class DshManager {
       this.opts.log(`       DSH_HOME: ${env.DSH_HOME ?? "(inherit)"}`);
     }
 
-    const child = spawn(cli.cmd, cli.prefixArgs.concat(args), {
-      cwd: this.opts.cwd ?? os.homedir(),
-      env,
-      windowsHide: true,
-      shell: cli.shell === true
-    });
+    let child: ChildProcess;
+    try {
+      child = spawn(cli.cmd, cli.prefixArgs.concat(args), {
+        cwd: this.opts.cwd ?? os.homedir(),
+        env,
+        windowsHide: true,
+        shell: cli.shell === true
+      });
+    } catch (err) {
+      // Synchronous spawn failure (bad executable, EPERM, …): surface it and
+      // leave the manager in a retryable state instead of "starting" forever.
+      this.opts.log(`spawn error: ${String(err)}`);
+      this.setState("error", `spawn error: ${String(err)}`);
+      return;
+    }
     this.child = child;
     this.startedAt = Date.now();
     this.everRan = true;
@@ -463,6 +599,10 @@ export class DshManager {
     if (this.disposed || this.child !== child) return;
     const url = this.url;
     if (url === undefined) return;
+    // The spawn path is now bound to a live, owned child — clear the
+    // watch's "look for an external server on the configured port" hint so
+    // a future re-probe doesn't re-adopt the very server we just started.
+    this.awaitingExternal = false;
     this.setState("starting");
 
     // Health check: the root must answer 200 with the SPA.
@@ -473,6 +613,7 @@ export class DshManager {
         const ok = await this.isDshServer(url);
         if (ok) {
           this.autoRestartCount = 0;
+          this.panelSupport = await this.ensurePanelSupport(url);
           this.setState("running");
           return;
         }
@@ -518,9 +659,90 @@ export class DshManager {
     }, RESTART_DELAY_MS);
   }
 
+  // -------------------------------------------------------------- health watch
+
+  /**
+   * Periodically probe the running server and watch for an external server
+   * to come back:
+   *   - state "running": a dead server (adopted from a terminal, or an owned
+   *     process that hangs) must never keep the UI on a stale "running" —
+   *     after two consecutive failed probes the state is corrected and the
+   *     normal recovery paths (auto-restart / adopt / start) become live again.
+   *   - awaitingExternal: an adopted server disappeared; re-adopt it as soon
+   *     as it answers again (never spawns on its own).
+   */
+  private async watchTick(): Promise<void> {
+    if (this.disposed) return;
+    if (this.state === "running" && this.url !== undefined) {
+      const status = await this.probe(this.url, 2_000);
+      if (status === 200) {
+        this.healthFailures = 0;
+        return;
+      }
+      this.healthFailures += 1;
+      if (this.healthFailures >= WATCH_FAILURES_TO_DIE) {
+        this.handleHealthFailure();
+      }
+      return;
+    }
+    this.healthFailures = 0;
+    if (this.awaitingExternal && this.opts.port > 0) {
+      const candidate = `http://127.0.0.1:${this.opts.port}`;
+      if (await this.isDshServer(candidate)) {
+        this.opts.log(`watch: external dsh server is back at ${candidate} — re-adopting`);
+        this.awaitingExternal = false;
+        this.external = true;
+        this.url = candidate;
+        this.everRan = true;
+        this.autoRestartCount = 0;
+        this.panelSupport = await this.ensurePanelSupport(candidate);
+        this.setState("running");
+      } else if (this.state === "stopped" && this.child === undefined && (this.autoRestartCount ?? 0) < MAX_AUTO_RESTARTS) {
+        // No external server is answering on the configured port and the
+        // auto-restart budget is not yet exhausted: kick a fresh start() so
+        // the manager tries to spawn its own dsh. Without this, a manager
+        // that burned its scheduleRestart budget on EADDRINUSE / module-load
+        // failures would stay "stopped" forever even after the port freed
+        // up; here we keep the recovery loop alive on every watch tick
+        // (5s) until either a spawn succeeds or an external server returns.
+        this.opts.log(`watch: no external dsh on ${candidate} — re-attempting start()`);
+        this.autoRestartCount += 1;
+        void this.start().catch((err) => this.opts.log(`watch: start retry failed: ${String(err)}`));
+      }
+    }
+  }
+
+  /** The watched server stopped answering: correct the stale state. */
+  private handleHealthFailure(): void {
+    this.healthFailures = 0;
+    this.opts.log("watch: the dsh server stopped answering");
+    if (this.child !== undefined) {
+      // Owned process that hangs (or died without a clean exit event): kill it
+      // so the exit handler transitions the state and applies the restart budget.
+      this.killChild(this.child);
+      return;
+    }
+    if (this.external) {
+      this.external = false;
+      this.url = undefined;
+      if (this.opts.watchExternal !== false) {
+        this.awaitingExternal = true;
+      }
+      this.setState("stopped", "external dsh service stopped — auto-restart scheduled");
+      // The adopted server died exactly like an unexpected exit of our own
+      // process: auto-start a replacement (or re-adopt it if it returns first).
+      // Honors dsh.autoRestart and its restart budget; when the budget is
+      // exhausted the watch keeps re-adopting the external server if it returns.
+      this.scheduleRestart();
+      return;
+    }
+    // Running but neither owned nor adopted — nothing to recover.
+  }
+
   // ------------------------------------------------------------------ stop
 
   async stop(): Promise<void> {
+    this.awaitingExternal = false;
     if (this.restartTimer !== undefined) {
       clearTimeout(this.restartTimer);
       this.restartTimer = undefined;
@@ -741,6 +963,11 @@ export class DshManager {
 
   dispose(): void {
     this.disposed = true;
+    this.awaitingExternal = false;
+    if (this.watchTimer !== undefined) {
+      clearInterval(this.watchTimer);
+      this.watchTimer = undefined;
+    }
     if (this.healthTimer !== undefined) clearTimeout(this.healthTimer);
     if (this.restartTimer !== undefined) clearTimeout(this.restartTimer);
     if (this.child !== undefined && !this.child.killed) {
@@ -767,6 +994,33 @@ function readPackageVersion(pkgJsonPath: string): string | undefined {
     return typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Inject the split-panel adapter into one index.html string.
+ * @returns the patched HTML, or undefined when the document already carries
+ * the current adapter (or cannot carry one).
+ */
+export function injectPanelSupport(html: string): string | undefined {
+  const next = injectPanelSupportHtml(html);
+  return next === null ? undefined : next;
+}
+
+/**
+ * Patch one dsh-web-frontend dist/index.html on disk (idempotent).
+ * @returns true when this call modified the file.
+ */
+export function patchFrontendIndexFile(file: string, log?: (line: string) => void): boolean {
+  try {
+    const next = injectPanelSupport(readFileSync(file, "utf8"));
+    if (next === undefined) return false;
+    writeFileSync(file, next);
+    log?.(`panel: patched ${file}`);
+    return true;
+  } catch (err) {
+    log?.(`panel: could not patch ${file}: ${String(err)}`);
+    return false;
   }
 }
 

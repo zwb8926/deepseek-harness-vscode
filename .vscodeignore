@@ -8,16 +8,72 @@ tsconfig.json
 .gitignore
 smoke-notes.md
 
-# node_modules ships (bundled @deepseek-ai/dsh), but trim what runtime never reads
+# node_modules ships (bundled @deepseek-ai/dsh), but trim what runtime never reads.
+# Source maps, type definitions, test/doc scaffolding and debug symbols are
+# pure build/dev artifacts and have no place in a 250 MB-bounded extension.
 node_modules/**/*.map
 node_modules/**/*.d.ts
+node_modules/**/*.pdb
 node_modules/**/test/**
 node_modules/**/tests/**
 node_modules/**/__tests__/**
+node_modules/**/__mocks__/**
 node_modules/**/README*
+node_modules/**/readme*
+node_modules/**/README-*
 node_modules/**/LICENSE*
+node_modules/**/License*
+node_modules/**/license*
 node_modules/**/CHANGELOG*
+node_modules/**/changelog*
+node_modules/**/HISTORY*
+node_modules/**/SECURITY*
 node_modules/**/.github/**
+node_modules/**/.git/**
+node_modules/**/.vscode/**
 node_modules/**/docs/**
+# NOTE: do NOT ignore `node_modules/**/doc/**` — several runtime packages
+# (e.g. `yaml` >= 2.x: `dist/doc/directives.js`) ship required code in a
+# `doc/` subdirectory and `require('../doc/directives.js')` at load time.
+# The size saved is small (a handful of *.md files in a few packages) but
+# the breakage is total: every spawned dsh exits code 1 with
+# `Cannot find module '../doc/directives.js'`.
+node_modules/**/example/**
 node_modules/**/examples/**
+node_modules/**/demo/**
 node_modules/**/benchmark/**
+node_modules/**/coverage/**
+node_modules/**/.bin/**
+
+# node-pty is platform-specific: dsh loads the matching prebuild at runtime
+# via process.platform/process.arch, never the others. ship only the win32-x64
+# prebuilds (the extension is published for VSCode Windows / Cursor Windows;
+# the macOS / Linux users get dsh via PATH or auto-install, never via this
+# extension's bundled copy).
+node_modules/node-pty/prebuilds/darwin-arm64/**
+node_modules/node-pty/prebuilds/darwin-x64/**
+node_modules/node-pty/prebuilds/linux-arm64/**
+node_modules/node-pty/prebuilds/linux-x64/**
+node_modules/node-pty/prebuilds/win32-arm64/**
+node_modules/node-pty/third_party/conpty/**/win10-arm64/**
+
+# @img/sharp: only the matching platform package is loaded; others are dead weight.
+node_modules/@img/sharp-darwin-arm64/**
+node_modules/@img/sharp-darwin-x64/**
+node_modules/@img/sharp-linux-arm64/**
+node_modules/@img/sharp-linux-x64/**
+node_modules/@img/sharp-wasm32/**
+
+# @vscode/ripgrep: shipped for all platforms; only the platform that matches
+# the user's OS is ever invoked.
+node_modules/@vscode/ripgrep-darwin-arm64/**
+node_modules/@vscode/ripgrep-darwin-x64/**
+node_modules/@vscode/ripgrep-linux-arm64/**
+node_modules/@vscode/ripgrep-linux-x64/**
+
+# node-addon-require-builtin: tiny helper, no native payload, but its test
+# fixtures and tarball are noise.
+node_modules/node-addon-require-builtin/test/**
+
+# sharp-win32-x64 prebuild includes libvips native DLLs; keep win32-x64, drop others.
+
