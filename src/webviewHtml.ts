@@ -58,8 +58,8 @@ button {
 button:hover { background: var(--vscode-button-hoverBackground); }
 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
 button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-.launcher { display: flex; flex-direction: column; height: 100%; }
-.launcher iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--vscode-editor-background); }
+.launcher { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.launcher iframe { flex: 1 1 0; min-height: 0; width: 100%; border: 0; background: var(--vscode-editor-background); }
 .launcher .status {
   flex: none; font-size: 11px; line-height: 1.5; padding: 6px 8px; border-radius: 0;
   border-top: 1px solid var(--vscode-widget-border, transparent);
@@ -100,14 +100,50 @@ export function shellHtml(body: string, dark: boolean): string {
   // The embedded GUI iframe (sidebar panel) reports session picks and
   // settings requests — open or reveal the editor tab so the conversation /
   // settings are visible.
+  //
+  // We only need to gate on data.source (the iframe runs panel-inject.js
+  // which sets that field). Checking e.source against the current
+  // frame.contentWindow is unreliable: when the launcher HTML is
+  // re-rendered (e.g. on a state transition), the old frame reference
+  // in this closure becomes stale, and messages from the new iframe
+  // are dropped. Trust the message tag — only the panel-inject script
+  // ever sets source = "dsh-vscode-panel".
   window.addEventListener("message", function (e) {
     const data = e.data;
     if (data === null || typeof data !== "object" || data.source !== "dsh-vscode-panel") return;
-    const frame = document.querySelector("iframe");
-    if (frame === null || e.source !== frame.contentWindow) return;
     if (data.type === "session-selected") vscode.postMessage({ type: "open-chat" });
     else if (data.type === "settings-selected") vscode.postMessage({ type: "open-settings" });
   });
+  // Forward host → iframe messages (e.g. "the editor tab was opened /
+  // closed"). The iframe's panel-inject script listens for these and
+  // reacts (toggles the no-tab CSS class, etc.). A session-closed
+  // message also restores the default "no current" highlight until
+  // the user picks a session again.
+  window.addEventListener("message", function (e) {
+    const data = e.data;
+    if (data === null || typeof data !== "object" || data.source !== "dsh-vscode-host") return;
+    const frame = document.querySelector("iframe");
+    if (frame === null || frame.contentWindow === null) return;
+    try { frame.contentWindow.postMessage(data, "*"); } catch (err) { /* iframe gone */ }
+  });
+  // On launcher activation there is no editor tab open yet, so the
+  // sidebar should start in its no-highlight state. The first
+  // session- / settings-selected message from the iframe will be
+  // paired with the extension opening the editor tab, after which
+  // the extension posts "session-opened" to lift the no-highlight
+  // class.
+  const initial = document.createElement("script");
+  initial.textContent =
+    "document.documentElement.classList.add('dsh-no-tab');" +
+    "var s=document.createElement('style');" +
+    "s.id='dsh-no-tab';" +
+    "s.textContent='html.dsh-no-tab [class*=\"sessionRow\"][class*=\"selected\"],'+" +
+      "'html.dsh-no-tab [class*=\"sessionRow\"][aria-selected=\"true\"] {'+" +
+      "'background: transparent !important;'+" +
+      "'color: inherit !important;'+" +
+      "'box-shadow: none !important;}';" +
+    "document.head.appendChild(s);";
+  document.head.appendChild(initial);
 })();
 </script>
 </body>

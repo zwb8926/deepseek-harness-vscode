@@ -61,8 +61,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
       ' width: 300px !important; height: 100% !important;' +
       ' overflow: visible !important;' +
-      ' visibility: hidden !important; pointer-events: none !important;' +
-      ' z-index: 2147483647 !important; }' +
+      ' visibility: hidden !important; pointer-events: none !important; }' +
     'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
       ' position: fixed !important; inset: 0 !important;' +
       ' visibility: visible !important; pointer-events: auto !important; }' +
@@ -118,21 +117,60 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     // capture time so the launcher's own narrow modal never opens.
     var last = null;
     try { last = localStorage.getItem('dsh.sessions.current'); } catch (e) {}
+    var postSessionSelected = function () {
+      try { parent.postMessage({ source: 'dsh-vscode-panel', type: 'session-selected' }, '*'); } catch (e) {}
+    };
     setInterval(function () {
       var now = null;
       try { now = localStorage.getItem('dsh.sessions.current'); } catch (e) {}
       if (now !== last) {
         last = now;
-        try { parent.postMessage({ source: 'dsh-vscode-panel', type: 'session-selected' }, '*'); } catch (e) {}
+        postSessionSelected();
       }
     }, 400);
     document.addEventListener('click', function (e) {
       var t = e.target && e.target.closest ? e.target.closest(settingsTrigger) : null;
-      if (!t) return;
-      e.stopPropagation();
-      e.preventDefault();
-      try { localStorage.setItem(settingsKey, String(Date.now())); } catch (e2) {}
-      try { parent.postMessage({ source: 'dsh-vscode-panel', type: 'settings-selected' }, '*'); } catch (e2) {}
+      if (t) {
+        e.stopPropagation();
+        e.preventDefault();
+        try { localStorage.setItem(settingsKey, String(Date.now())); } catch (e2) {}
+        try { parent.postMessage({ source: 'dsh-vscode-panel', type: 'settings-selected' }, '*'); } catch (e2) {}
+        return;
+      }
+      // Every click on a session row (the treeitem under the sidebar) must
+      // open the editor tab — including a click on the row that is already
+      // selected. The polling above only fires when the localStorage value
+      // actually changes, so an "already selected" re-click would be lost.
+      // Here we capture the click before React handles it and re-emit a
+      // session-selected message, then mirror dsh's own selection write
+      // (best effort — if the sessionId can't be read from the row, we
+      // still post the message so the editor tab comes to the front).
+      var row = e.target && e.target.closest
+        ? e.target.closest('[class*="sessionRow"][role="treeitem"]')
+        : null;
+      if (row) {
+        // Skip if the user clicked an action button inside the row (rename,
+        // delete, etc.) — those have their own handlers and we must not
+        // also open the editor tab.
+        var action = e.target && e.target.closest
+          ? e.target.closest('[class*="rowActions"]')
+          : null;
+        if (!action) {
+          // If dsh has stamped the row with a sessionId attribute, mirror
+          // its future write so the 400 ms polling and any same-origin
+          // storage listener stay consistent. When no attribute is set
+          // (the current dsh build), just post the message — dsh's own
+          // React onClick will write the new id to localStorage itself
+          // a few milliseconds later, and the polling tick will pick
+          // that up and post a second message. Either way the editor
+          // tab opens; the duplicate is harmless.
+          var sid = row.getAttribute('data-session-id') || row.getAttribute('data-id') || null;
+          if (sid !== null) {
+            try { localStorage.setItem('dsh.sessions.current', sid); last = sid; } catch (e3) {}
+          }
+          postSessionSelected();
+        }
+      }
     }, true);
   }
 })();

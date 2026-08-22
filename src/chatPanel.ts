@@ -23,7 +23,15 @@ export class ChatPanel {
 
   constructor(
     private readonly onAction: (action: PanelAction) => void,
-    private readonly extensionUri: vscode.Uri
+    private readonly extensionUri: vscode.Uri,
+    /** Invoked when the editor tab is closed by the user. The launcher
+     *  sidebar uses this to clear the "currently selected" highlight in
+     *  the embedded dsh GUI — when there is no open editor tab, the
+     *  sidebar should not show any session as selected. */
+    private readonly onDispose?: () => void,
+    /** Invoked when the editor tab is (re-)opened. Used by the launcher
+     *  to lift the no-highlight CSS override. */
+    private readonly onOpen?: () => void
   ) {}
 
   open(): void {
@@ -49,6 +57,7 @@ export class ChatPanel {
         () => {
           this.panel = undefined;
           for (const d of disposables) d.dispose();
+          this.onDispose?.();
         },
         undefined,
         disposables
@@ -66,6 +75,7 @@ export class ChatPanel {
       this.panel.reveal();
     }
     this.render();
+    this.onOpen?.();
   }
 
   /** Re-render (also used as "reload panel" — a fresh iframe means a fresh page). */

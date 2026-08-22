@@ -28,7 +28,6 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(statusBar);
 
   const autoInstallDir = path.join(context.globalStorageUri.fsPath, "dsh-cli");
-  let panelAutoOpened = false;
 
   const manager = new DshManager({
     port: 3080,
@@ -48,19 +47,12 @@ export function activate(context: vscode.ExtensionContext): void {
         // 把当前 VS Code 项目注册为 dsh workspace（workspace.create 幂等，
         // 不创建会话）——侧栏的 workspace 分组立即可见该项目。
         void ensureProjectWorkspace();
-        // Editor tab auto-open (Claude-style), once per activation. This is a
-        // UI affordance and does NOT depend on dsh.autoStart (that setting
-        // only controls the server lifecycle); a failure retries on the next
-        // running transition.
-        if (!panelAutoOpened) {
-          panelAutoOpened = true;
-          try {
-            panel.open();
-          } catch (err) {
-            log(`auto-open chat panel failed: ${String(err)}`);
-            panelAutoOpened = false;
-          }
-        }
+        // Note: do NOT auto-open the chat editor tab here. The tab is
+        // opened only when the user clicks the status bar (`dsh.openChat`)
+        // or a session in the launcher sidebar. Auto-starting the server
+        // and registering the workspace are silent background actions.
+        // Push the current VS Code theme into the dsh UI so the embedded
+        // webview matches the user's color preference.
         void syncTheme();
       }
     },
@@ -71,20 +63,48 @@ export function activate(context: vscode.ExtensionContext): void {
     (action: PanelAction) => {
       void handlePanelAction(action);
     },
-    context.extensionUri
+    context.extensionUri,
+    // The editor tab is the only place where a "current session" makes
+    // sense — when the user closes the tab there is no conversation
+    // panel left. Ask the launcher to drop its selected highlight so
+    // the sidebar does not show a session as active that has no
+    // editor tab open anywhere.
+    () => {
+      launcher.postToGui({ type: "session-closed" });
+    },
+    // A new editor tab is opening (or an existing one is being
+    // revealed). Restore the sidebar's normal highlight so the user
+    // can see which row is currently being shown.
+    () => {
+      launcher.postToGui({ type: "session-opened" });
+    }
   );
 
   // Activity-bar whale icon → sidebar panel with session controls; the chat
   // itself always opens as a full editor tab.
+  let launcherFirstReveal = true;
   const launcher = new LauncherViewProvider(
     (action: PanelAction) => {
       void handlePanelAction(action);
     },
-    // Whenever the launcher becomes visible (e.g. right after VS Code opens),
-    // re-attempt adopt-or-start so the sidebar never stays stuck on
-    // "服务未运行" while a dsh server is reachable on port 3080.
+    // Whenever the launcher becomes visible:
+    //   - on the first reveal of the session, start the server (if not
+    //     already running) AND open the chat editor tab so the user has
+    //     the conversation ready to go;
+    //   - on every subsequent re-probe, just re-attempt adopt-or-start
+    //     so the sidebar never stays stuck on "服务未运行" while a dsh
+    //     server is reachable on port 3080. We do NOT re-open the
+    //     editor tab on every visibility flip — that would pop the
+    //     chat back to the front any time the user clicks the
+    //     activity-bar icon.
     () => {
-      if (getCfg("autoStart", true) && !manager.running) {
+      if (!getCfg("autoStart", true)) return;
+      if (launcherFirstReveal) {
+        launcherFirstReveal = false;
+        void ensureStarted()
+          .catch((err) => log(`launcher-open auto-start failed: ${String(err)}`))
+          .finally(() => { void openChatInEditor(); });
+      } else if (!manager.running) {
         void ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
       }
     }
