@@ -28,7 +28,6 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(statusBar);
 
   const autoInstallDir = path.join(context.globalStorageUri.fsPath, "dsh-cli");
-  let panelAutoOpened = false;
 
   const manager = new DshManager({
     port: 3080,
@@ -48,19 +47,12 @@ export function activate(context: vscode.ExtensionContext): void {
         // 把当前 VS Code 项目注册为 dsh workspace（workspace.create 幂等，
         // 不创建会话）——侧栏的 workspace 分组立即可见该项目。
         void ensureProjectWorkspace();
-        // Editor tab auto-open (Claude-style), once per activation. This is a
-        // UI affordance and does NOT depend on dsh.autoStart (that setting
-        // only controls the server lifecycle); a failure retries on the next
-        // running transition.
-        if (!panelAutoOpened) {
-          panelAutoOpened = true;
-          try {
-            panel.open();
-          } catch (err) {
-            log(`auto-open chat panel failed: ${String(err)}`);
-            panelAutoOpened = false;
-          }
-        }
+        // Note: do NOT auto-open the chat editor tab here. The tab is
+        // opened only when the user clicks the status bar (`dsh.openChat`)
+        // or a session in the launcher sidebar. Auto-starting the server
+        // and registering the workspace are silent background actions.
+        // Push the current VS Code theme into the dsh UI so the embedded
+        // webview matches the user's color preference.
         void syncTheme();
       }
     },
