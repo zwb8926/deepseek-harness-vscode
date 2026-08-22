@@ -32,7 +32,12 @@ node_modules/**/.github/**
 node_modules/**/.git/**
 node_modules/**/.vscode/**
 node_modules/**/docs/**
-node_modules/**/doc/**
+# NOTE: do NOT ignore `node_modules/**/doc/**` — several runtime packages
+# (e.g. `yaml` >= 2.x: `dist/doc/directives.js`) ship required code in a
+# `doc/` subdirectory and `require('../doc/directives.js')` at load time.
+# The size saved is small (a handful of *.md files in a few packages) but
+# the breakage is total: every spawned dsh exits code 1 with
+# `Cannot find module '../doc/directives.js'`.
 node_modules/**/example/**
 node_modules/**/examples/**
 node_modules/**/demo/**
