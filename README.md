@@ -24,7 +24,6 @@
 
 | 设置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| `dsh.port` | `0` | 内嵌服务端口。`0` = 每次启动由系统随机分配（全新浏览器 origin，GUI 自动打开最新工作区）。显式设置时若该端口已有 dsh 服务则接管之 |
 | `dsh.home` | `""` | `DSH_HOME` 覆盖。空 = 系统默认（`~/.dsh`） |
 | `dsh.cliPath` | `""` | dsh CLI 的绝对路径（`…/@deepseek-ai/dsh/lib/bin.js`）或 PATH 中的 `dsh` 命令 |
 | `dsh.autoStart` | `true` | VS Code 启动及打开聊天 UI 时自动启动（或接管）服务 |
@@ -36,6 +35,7 @@
 ## 注意事项
 
 - **无需 node/npm**：`@deepseek-ai/dsh` 已随扩展打包（vsix 内含完整依赖树，约 200MB）。启动时优先使用 PATH 中的 `node`；机器上**没有 node、没有 npm/npx 也能启动**——扩展宿主会用 `ELECTRON_RUN_AS_NODE=1` 把自己的运行时当 node 使用
-- 内嵌服务仅绑定 `127.0.0.1`（安全默认；dsh 有意拒绝 `--host 0.0.0.0`）
+- 内嵌服务仅绑定 `127.0.0.1:3080`（端口固定；若该端口已有 dsh 服务则直接接管）
+- **不自动新建会话**：点"打开DSH"只打开当前项目已有的会话（没有则打开面板，新建在 GUI 内操作）
 - 内嵌服务与你自己运行的 `dsh web` 共用同一 `DSH_HOME` 时会共享数据目录；如需隔离实例请设置独立的 `dsh.home`
 - v1 通过 iframe 嵌入 GUI；若未来 VS Code 版本限制 webview iframe，可使用 `DSH: Open in Browser` 作为兜底

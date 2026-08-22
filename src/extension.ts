@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const autoInstallDir = path.join(context.globalStorageUri.fsPath, "dsh-cli");
 
   const manager = new DshManager({
-    port: getCfg("port", 0),
+    port: 3080,
     home: getCfg("home", ""),
     cliPath: getCfg("cliPath", ""),
     cwd: workspaceCwd(),
@@ -98,7 +98,7 @@ export function activate(context: vscode.ExtensionContext): void {
   /** Refresh spawn-relevant options from settings before a start. */
   function syncOptions(): void {
     manager.configure({
-      port: getCfg("port", 0),
+      port: 3080,
       home: getCfg("home", ""),
       cliPath: getCfg("cliPath", ""),
       extraArgs: getCfg("extraArgs", []),
@@ -115,9 +115,8 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   /**
-   * 打开DSH：取当前项目路径 → 查该项目的会话 → 有则打开，没有才新建。
-   * The GUI boots into the persisted selection or the most recent workspace,
-   * so the target session is chosen as the project's most recently updated.
+   * 打开DSH：取当前项目路径 → 查该项目的会话 → 有则打开。
+   * 不自动新建会话（新建由 GUI 内的"新建会话"入口完成）。
    */
   async function openOrCreateSession(): Promise<void> {
     if (!manager.running) {
@@ -129,10 +128,11 @@ export function activate(context: vscode.ExtensionContext): void {
     manager.setProject(project);
     log(`workspaceCwd: ${project}`);
 
-    // 1. Adopt/create the workspace record for the project.
+    // 1. Adopt/create the workspace record for the project (grouping only,
+    //    never creates a session).
     const workspaceId = await manager.ensureWorkspace(project);
 
-    // 2. Look at existing sessions bound to this project.
+    // 2. Look at existing sessions bound to this project; open the newest.
     let target: string | undefined;
     if (workspaceId !== undefined) {
       const ws = (await manager.listWorkspaces())?.find((w) => w.workspaceId === workspaceId);
@@ -144,18 +144,12 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }
 
-    // 3. None exists — create one bound to the project.
-    if (target === undefined) {
-      target = await manager.createSessionInWorkspace(project);
-      log(`created session: ${target ?? "?"} (workspace: ${project})`);
-    } else {
+    if (target !== undefined) {
       log(`opening existing session: ${target} (workspace: ${project})`);
+    } else {
+      log(`no existing session for ${project} — opening the panel without creating one`);
     }
 
-    if (target === undefined) {
-      void vscode.window.showErrorMessage("创建会话失败，请查看 DeepSeek Harness 输出日志。");
-      return;
-    }
     panel.open();
     panel.reload();
 
