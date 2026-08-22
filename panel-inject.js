@@ -61,7 +61,8 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
       ' width: 300px !important; height: 100% !important;' +
       ' overflow: visible !important;' +
-      ' visibility: hidden !important; pointer-events: none !important; }' +
+      ' visibility: hidden !important; pointer-events: none !important;' +
+      ' z-index: 2147483647 !important; }' +
     'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
       ' position: fixed !important; inset: 0 !important;' +
       ' visibility: visible !important; pointer-events: auto !important; }' +
