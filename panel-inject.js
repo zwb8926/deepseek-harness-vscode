@@ -81,8 +81,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
       ' width: 300px !important; height: 100% !important;' +
       ' overflow: visible !important;' +
-      ' visibility: hidden !important; pointer-events: none !important;' +
-      ' z-index: 2147483647 !important; }' +
+      ' visibility: hidden !important; pointer-events: none !important; }' +
     'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
       ' position: fixed !important; inset: 0 !important;' +
       ' visibility: visible !important; pointer-events: auto !important; }' +
@@ -97,7 +96,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     'html[data-dsh-panel="center"] [role="menu"],' +
     'html[data-dsh-panel="center"] [role="listbox"],' +
     'html[data-dsh-panel="center"] [role="dialog"] {' +
-      ' z-index: 2147483647 !important; }' +
+      ' z-index: 2147483647 !important; }' + // also covers the nested delete-confirm dialog
     'html[data-dsh-panel="center"] [class$="_frame"] > [class$="_handle"][data-side="sidebar"]' +
       ' { display: none !important; }' +
     'html[data-dsh-panel="center"] [class*="centerCol"] { grid-column: 1 / 3 !important; }';
