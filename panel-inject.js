@@ -129,6 +129,52 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
         postSessionSelected();
       }
     }, 400);
+    // The extension tells the launcher when the editor tab is closed so
+    // the sidebar can drop the "currently selected" highlight. The center
+    // (editor) panel is the writing side: when it goes away the sidebar
+    // should not show any session as active — there is no conversation
+    // panel open anywhere for the highlighted row to refer to.
+    //
+    // dsh always picks a default session on mount (the first one if
+    // localStorage is empty) and writes that back to localStorage, so
+    // clearing localStorage is a no-op — dsh restores it on the next
+    // render. The only way to suppress the visual highlight without
+    // rebuilding dsh is a CSS override scoped to a body class that the
+    // launcher toggles on / off as the editor tab opens and closes.
+    var noTabStyle = document.createElement('style');
+    noTabStyle.id = 'dsh-no-tab';
+    noTabStyle.textContent = 'html.dsh-no-tab [class*="sessionRow"][class*="selected"],' +
+      ' html.dsh-no-tab [class*="sessionRow"][aria-selected="true"] {' +
+      ' background: transparent !important;' +
+      ' color: inherit !important;' +
+      ' box-shadow: none !important;' +
+      '}' +
+      'html.dsh-no-tab [class*="sessionRow"][class*="selected"] [class*="title"],' +
+      ' html.dsh-no-tab [class*="sessionRow"][class*="selected"] [class*="label"],' +
+      ' html.dsh-no-tab [class*="sessionRow"][class*="selected"] [class*="name"] {' +
+      ' color: inherit !important;' +
+      ' font-weight: normal !important;' +
+      '}';
+    window.addEventListener('message', function (e) {
+      var data = e.data;
+      if (data === null || typeof data !== "object" || data.source !== 'dsh-vscode-host') return;
+      if (data.type === 'session-closed') {
+        try { localStorage.removeItem('dsh.sessions.current'); } catch (e2) {}
+        last = null;
+        // Apply the no-highlight override. dsh will keep its own
+        // internal "current" pointer (and the editor-tab click path
+        // will still match against it), but the sidebar no longer
+        // paints it differently from the other rows.
+        document.documentElement.classList.add('dsh-no-tab');
+        if (!document.getElementById('dsh-no-tab')) {
+          document.head.appendChild(noTabStyle);
+        }
+      } else if (data.type === 'session-opened') {
+        // An editor tab is now showing a session — restore the real
+        // highlight so the user can see which row is "current".
+        document.documentElement.classList.remove('dsh-no-tab');
+      }
+    });
     document.addEventListener('click', function (e) {
       var t = e.target && e.target.closest ? e.target.closest(settingsTrigger) : null;
       if (t) {

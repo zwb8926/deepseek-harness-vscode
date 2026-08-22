@@ -114,6 +114,36 @@ export function shellHtml(body: string, dark: boolean): string {
     if (data.type === "session-selected") vscode.postMessage({ type: "open-chat" });
     else if (data.type === "settings-selected") vscode.postMessage({ type: "open-settings" });
   });
+  // Forward host → iframe messages (e.g. "the editor tab was opened /
+  // closed"). The iframe's panel-inject script listens for these and
+  // reacts (toggles the no-tab CSS class, etc.). A session-closed
+  // message also restores the default "no current" highlight until
+  // the user picks a session again.
+  window.addEventListener("message", function (e) {
+    const data = e.data;
+    if (data === null || typeof data !== "object" || data.source !== "dsh-vscode-host") return;
+    const frame = document.querySelector("iframe");
+    if (frame === null || frame.contentWindow === null) return;
+    try { frame.contentWindow.postMessage(data, "*"); } catch (err) { /* iframe gone */ }
+  });
+  // On launcher activation there is no editor tab open yet, so the
+  // sidebar should start in its no-highlight state. The first
+  // session- / settings-selected message from the iframe will be
+  // paired with the extension opening the editor tab, after which
+  // the extension posts "session-opened" to lift the no-highlight
+  // class.
+  const initial = document.createElement("script");
+  initial.textContent =
+    "document.documentElement.classList.add('dsh-no-tab');" +
+    "var s=document.createElement('style');" +
+    "s.id='dsh-no-tab';" +
+    "s.textContent='html.dsh-no-tab [class*=\"sessionRow\"][class*=\"selected\"],'+" +
+      "'html.dsh-no-tab [class*=\"sessionRow\"][aria-selected=\"true\"] {'+" +
+      "'background: transparent !important;'+" +
+      "'color: inherit !important;'+" +
+      "'box-shadow: none !important;}';" +
+    "document.head.appendChild(s);";
+  document.head.appendChild(initial);
 })();
 </script>
 </body>

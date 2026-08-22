@@ -51,6 +51,16 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
     this.render();
   }
 
+  /** Post a message to the embedded dsh GUI iframe (the one that runs
+   *  panel-inject.js). Used by the extension to notify the sidebar that
+   *  the editor tab has been closed, so the sidebar can drop its
+   *  "currently selected" highlight. */
+  postToGui(message: Record<string, unknown>): void {
+    const view = this.view;
+    if (view === undefined) return;
+    view.webview.postMessage({ source: "dsh-vscode-host", ...message });
+  }
+
   private render(): void {
     if (this.view === undefined) return;
     this.view.webview.html = shellHtml(launcherBody(this.lastInfo), vscodeThemeDark());

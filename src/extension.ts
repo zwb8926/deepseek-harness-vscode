@@ -63,7 +63,21 @@ export function activate(context: vscode.ExtensionContext): void {
     (action: PanelAction) => {
       void handlePanelAction(action);
     },
-    context.extensionUri
+    context.extensionUri,
+    // The editor tab is the only place where a "current session" makes
+    // sense — when the user closes the tab there is no conversation
+    // panel left. Ask the launcher to drop its selected highlight so
+    // the sidebar does not show a session as active that has no
+    // editor tab open anywhere.
+    () => {
+      launcher.postToGui({ type: "session-closed" });
+    },
+    // A new editor tab is opening (or an existing one is being
+    // revealed). Restore the sidebar's normal highlight so the user
+    // can see which row is currently being shown.
+    () => {
+      launcher.postToGui({ type: "session-opened" });
+    }
   );
 
   // Activity-bar whale icon → sidebar panel with session controls; the chat
