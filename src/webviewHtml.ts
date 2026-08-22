@@ -97,6 +97,15 @@ export function shellHtml(body: string, dark: boolean): string {
       vscode.postMessage({ type: b.getAttribute("data-cmd") });
     });
   });
+  // The embedded GUI iframe (sidebar panel) reports session picks — open or
+  // reveal the editor tab so the conversation is visible.
+  window.addEventListener("message", function (e) {
+    const data = e.data;
+    if (data === null || typeof data !== "object" || data.source !== "dsh-vscode-panel" || data.type !== "session-selected") return;
+    const frame = document.querySelector("iframe");
+    if (frame === null || e.source !== frame.contentWindow) return;
+    vscode.postMessage({ type: "open-chat" });
+  });
 })();
 </script>
 </body>

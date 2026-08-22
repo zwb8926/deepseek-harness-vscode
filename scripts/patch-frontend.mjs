@@ -2,16 +2,17 @@
 // dsh web frontend (node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html)
 // so the vsix ships a GUI that supports ?dshPanel=sidebar|center.
 //
-// Runs from vscode:prepublish (after `tsc`). Idempotent: a patched file is
-// skipped. Missing frontend (e.g. fresh clone without npm install) is a loud
-// warning, not a hard failure — the runtime patch in DshManager covers it.
+// Runs from vscode:prepublish (after `tsc`). Idempotent: a file carrying the
+// CURRENT adapter is skipped; an OLDER adapter block is replaced in place.
+// Missing frontend (e.g. fresh clone without npm install) is a loud warning,
+// not a hard failure — the runtime patch in DshManager covers it.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const { PANEL_MARKER, PANEL_INJECT } = require("../panel-inject.js");
+const { PANEL_INJECT, injectPanelSupportHtml } = require("../panel-inject.js");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const indexFile = resolve(here, "..", "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html");
@@ -23,14 +24,15 @@ if (!existsSync(indexFile)) {
 }
 
 const html = readFileSync(indexFile, "utf8");
-if (html.includes(PANEL_MARKER)) {
+if (html.includes(PANEL_INJECT)) {
   console.log("panel-inject: frontend already patched, skipping");
   process.exit(0);
 }
-if (!html.includes("</head>")) {
+const next = injectPanelSupportHtml(html);
+if (next === null) {
   console.warn(`panel-inject: WARN ${indexFile} has no </head>; refusing to patch`);
   process.exit(0);
 }
 
-writeFileSync(indexFile, html.replace("</head>", `${PANEL_INJECT}\n  </head>`));
+writeFileSync(indexFile, next);
 console.log(`panel-inject: patched ${indexFile}`);

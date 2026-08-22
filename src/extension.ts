@@ -48,12 +48,17 @@ export function activate(context: vscode.ExtensionContext): void {
         // 把当前 VS Code 项目注册为 dsh workspace（workspace.create 幂等，
         // 不创建会话）——侧栏的 workspace 分组立即可见该项目。
         void ensureProjectWorkspace();
-        // 2.0.0: the chat lives in the editor tab and the sidebar column in
-        // the launcher — open the editor tab once the server is up.
+        // Editor tab auto-open (Claude-style), once per activation. This is a
+        // UI affordance and does NOT depend on dsh.autoStart (that setting
+        // only controls the server lifecycle); a failure retries on the next
+        // running transition.
         if (!panelAutoOpened) {
           panelAutoOpened = true;
-          if (getCfg("autoStart", true)) {
+          try {
             panel.open();
+          } catch (err) {
+            log(`auto-open chat panel failed: ${String(err)}`);
+            panelAutoOpened = false;
           }
         }
         void syncTheme();

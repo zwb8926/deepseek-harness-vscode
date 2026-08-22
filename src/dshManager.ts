@@ -26,9 +26,10 @@ import * as path from "node:path";
 
 // Shared split-panel adapter shipped next to out/ (see panel-inject.js).
 // The injected script reads ?dshPanel=sidebar|center and adapts the GUI.
-const { PANEL_MARKER, PANEL_INJECT } = require("../panel-inject.js") as {
+const { PANEL_MARKER, PANEL_INJECT, injectPanelSupportHtml } = require("../panel-inject.js") as {
   PANEL_MARKER: string;
   PANEL_INJECT: string;
+  injectPanelSupportHtml: (html: string) => string | null;
 };
 
 export type DshState =
@@ -282,6 +283,16 @@ export class DshManager {
       const probe = url + "/?dshPanel=sidebar";
       const body = await this.fetchRoot(probe);
       if (body !== undefined && body.includes(PANEL_MARKER)) {
+        if (!body.includes(PANEL_INJECT)) {
+          // Split view works, but the served adapter predates the
+          // session-click coordination — best-effort upgrade of the frontend
+          // files on disk (the server re-reads index.html per request, so a
+          // later probe picks it up without a restart).
+          this.opts.log("panel: served adapter is outdated — upgrading frontend files");
+          for (const file of await this.findFrontendIndexFiles()) {
+            patchFrontendIndexFile(file, (line) => this.opts.log(line));
+          }
+        }
         this.opts.log("panel: frontend supports split panels (marker found)");
         return true;
       }
@@ -968,13 +979,12 @@ function readPackageVersion(pkgJsonPath: string): string | undefined {
 
 /**
  * Inject the split-panel adapter into one index.html string.
- * @returns the patched HTML, or undefined when it already carries the marker.
+ * @returns the patched HTML, or undefined when the document already carries
+ * the current adapter (or cannot carry one).
  */
 export function injectPanelSupport(html: string): string | undefined {
-  if (html.includes(PANEL_MARKER)) return undefined;
-  const headClose = html.indexOf("</head>");
-  if (headClose < 0) return undefined;
-  return html.slice(0, headClose) + PANEL_INJECT + "\n  " + html.slice(headClose);
+  const next = injectPanelSupportHtml(html);
+  return next === null ? undefined : next;
 }
 
 /**
