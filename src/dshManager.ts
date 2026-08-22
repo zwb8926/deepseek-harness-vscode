@@ -71,6 +71,10 @@ export interface DshOptions {
   autoInstallDir?: string;
   /** Restart once after an unexpected exit. */
   autoRestart?: boolean;
+  /** When an adopted external server disappears (e.g. a `dsh web` started in
+   * a terminal is stopped), keep probing the port and re-adopt automatically
+   * when it comes back (default true). Only adopts; never spawns. */
+  watchExternal?: boolean;
   /** When true, among the found dsh installs pick the newest version (default true). */
   preferNewer?: boolean;
   /** When true (and preferNewer), check the npm registry on start and auto-install a newer @deepseek-ai/dsh. */
@@ -90,6 +94,10 @@ const HEALTH_TIMEOUT_MS = 60_000;
 const HEALTH_INTERVAL_MS = 400;
 const RESTART_DELAY_MS = 2_000;
 const MAX_AUTO_RESTARTS = 2;
+/** Health watch: how often the running server is probed. */
+const WATCH_INTERVAL_MS = 5_000;
+/** Consecutive failed probes before the server is declared dead. */
+const WATCH_FAILURES_TO_DIE = 2;
 
 /**
  * Compare two dsh version strings (semver-ish, e.g. "0.1.0-rc.7").
@@ -150,13 +158,26 @@ export class DshManager {
   private restartTimer?: NodeJS.Timeout;
   private startedAt = 0;
   private everRan = false;
+  /** Health watch: probes the running server; detects when an adopted
+   * external server dies. */
+  private watchTimer?: NodeJS.Timeout;
+  private healthFailures = 0;
+  /** True while the manager waits for a disappeared external server to return. */
+  private awaitingExternal = false;
 
   constructor(opts: DshOptions) {
     this.opts = opts;
+    this.watchTimer = setInterval(() => {
+      void this.watchTick().catch(() => {
+        /* probe errors are handled inside watchTick */
+      });
+    }, WATCH_INTERVAL_MS);
+    // Do not keep a headless process alive just for the watch.
+    this.watchTimer.unref?.();
   }
 
   /** Update spawn-relevant options (applied on the next start). */
-  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "autoUpdate">>): void {
+  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "autoUpdate" | "watchExternal">>): void {
     Object.assign(this.opts, partial);
   }
 
@@ -449,6 +470,8 @@ export class DshManager {
         this.external = true;
         this.url = candidate;
         this.everRan = true;
+        this.awaitingExternal = false;
+        this.autoRestartCount = 0;
         this.panelSupport = await this.ensurePanelSupport(candidate);
         this.setState("running");
         return;
@@ -460,6 +483,7 @@ export class DshManager {
     this.external = false;
     this.url = undefined;
     this.panelSupport = undefined;
+    this.awaitingExternal = false;
     this.setState("locating");
     const cli = await this.resolveCli();
     if (cli === undefined) {
@@ -478,12 +502,21 @@ export class DshManager {
       this.opts.log(`       DSH_HOME: ${env.DSH_HOME ?? "(inherit)"}`);
     }
 
-    const child = spawn(cli.cmd, cli.prefixArgs.concat(args), {
-      cwd: this.opts.cwd ?? os.homedir(),
-      env,
-      windowsHide: true,
-      shell: cli.shell === true
-    });
+    let child: ChildProcess;
+    try {
+      child = spawn(cli.cmd, cli.prefixArgs.concat(args), {
+        cwd: this.opts.cwd ?? os.homedir(),
+        env,
+        windowsHide: true,
+        shell: cli.shell === true
+      });
+    } catch (err) {
+      // Synchronous spawn failure (bad executable, EPERM, …): surface it and
+      // leave the manager in a retryable state instead of "starting" forever.
+      this.opts.log(`spawn error: ${String(err)}`);
+      this.setState("error", `spawn error: ${String(err)}`);
+      return;
+    }
     this.child = child;
     this.startedAt = Date.now();
     this.everRan = true;
@@ -606,9 +639,79 @@ export class DshManager {
     }, RESTART_DELAY_MS);
   }
 
+  // -------------------------------------------------------------- health watch
+
+  /**
+   * Periodically probe the running server and watch for an external server
+   * to come back:
+   *   - state "running": a dead server (adopted from a terminal, or an owned
+   *     process that hangs) must never keep the UI on a stale "running" —
+   *     after two consecutive failed probes the state is corrected and the
+   *     normal recovery paths (auto-restart / adopt / start) become live again.
+   *   - awaitingExternal: an adopted server disappeared; re-adopt it as soon
+   *     as it answers again (never spawns on its own).
+   */
+  private async watchTick(): Promise<void> {
+    if (this.disposed) return;
+    if (this.state === "running" && this.url !== undefined) {
+      const status = await this.probe(this.url, 2_000);
+      if (status === 200) {
+        this.healthFailures = 0;
+        return;
+      }
+      this.healthFailures += 1;
+      if (this.healthFailures >= WATCH_FAILURES_TO_DIE) {
+        this.handleHealthFailure();
+      }
+      return;
+    }
+    this.healthFailures = 0;
+    if (this.awaitingExternal && this.opts.port > 0) {
+      const candidate = `http://127.0.0.1:${this.opts.port}`;
+      if (await this.isDshServer(candidate)) {
+        this.opts.log(`watch: external dsh server is back at ${candidate} — re-adopting`);
+        this.awaitingExternal = false;
+        this.external = true;
+        this.url = candidate;
+        this.everRan = true;
+        this.autoRestartCount = 0;
+        this.panelSupport = await this.ensurePanelSupport(candidate);
+        this.setState("running");
+      }
+    }
+  }
+
+  /** The watched server stopped answering: correct the stale state. */
+  private handleHealthFailure(): void {
+    this.healthFailures = 0;
+    this.opts.log("watch: the dsh server stopped answering");
+    if (this.child !== undefined) {
+      // Owned process that hangs (or died without a clean exit event): kill it
+      // so the exit handler transitions the state and applies the restart budget.
+      this.killChild(this.child);
+      return;
+    }
+    if (this.external) {
+      this.external = false;
+      this.url = undefined;
+      if (this.opts.watchExternal !== false) {
+        this.awaitingExternal = true;
+      }
+      this.setState("stopped", "external dsh service stopped — auto-restart scheduled");
+      // The adopted server died exactly like an unexpected exit of our own
+      // process: auto-start a replacement (or re-adopt it if it returns first).
+      // Honors dsh.autoRestart and its restart budget; when the budget is
+      // exhausted the watch keeps re-adopting the external server if it returns.
+      this.scheduleRestart();
+      return;
+    }
+    // Running but neither owned nor adopted — nothing to recover.
+  }
+
   // ------------------------------------------------------------------ stop
 
   async stop(): Promise<void> {
+    this.awaitingExternal = false;
     if (this.restartTimer !== undefined) {
       clearTimeout(this.restartTimer);
       this.restartTimer = undefined;
@@ -829,6 +932,11 @@ export class DshManager {
 
   dispose(): void {
     this.disposed = true;
+    this.awaitingExternal = false;
+    if (this.watchTimer !== undefined) {
+      clearInterval(this.watchTimer);
+      this.watchTimer = undefined;
+    }
     if (this.healthTimer !== undefined) clearTimeout(this.healthTimer);
     if (this.restartTimer !== undefined) clearTimeout(this.restartTimer);
     if (this.child !== undefined && !this.child.killed) {

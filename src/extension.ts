@@ -39,6 +39,7 @@ export function activate(context: vscode.ExtensionContext): void {
     autoInstall: getCfg("autoInstall", true),
     autoInstallDir,
     autoRestart: getCfg("autoRestart", true),
+    watchExternal: getCfg("autoStart", true),
     onInfo: (info) => {
       renderStatus(info);
       panel.update(info);
@@ -67,9 +68,19 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Activity-bar whale icon → sidebar panel with session controls; the chat
   // itself always opens as a full editor tab.
-  const launcher = new LauncherViewProvider((action: PanelAction) => {
-    void handlePanelAction(action);
-  });
+  const launcher = new LauncherViewProvider(
+    (action: PanelAction) => {
+      void handlePanelAction(action);
+    },
+    // Whenever the launcher becomes visible (e.g. right after VS Code opens),
+    // re-attempt adopt-or-start so the sidebar never stays stuck on
+    // "服务未运行" while a dsh server is reachable on port 3080.
+    () => {
+      if (getCfg("autoStart", true) && !manager.running) {
+        void ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
+      }
+    }
+  );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcher, {
       webviewOptions: { retainContextWhenHidden: true }
@@ -113,6 +124,7 @@ export function activate(context: vscode.ExtensionContext): void {
       extraArgs: getCfg("extraArgs", []),
       preferNewer: getCfg("preferNewer", true),
       autoUpdate: getCfg("autoUpdate", true),
+      watchExternal: getCfg("autoStart", true),
       cwd: workspaceCwd()
     });
   }

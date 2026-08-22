@@ -166,10 +166,21 @@ export function launcherBody(info?: DshRuntimeInfo): string {
   ${status}
 </div>`;
   }
+  const hintText =
+    info?.state === "error"
+      ? `启动失败：${escapeHtml(info.detail ?? "未知错误")}`
+      : info?.state === "locating" || info?.state === "starting" || info?.state === "installing"
+        ? "服务正在启动…"
+        : "服务未运行。";
+  const hintActions =
+    info?.state === "error" || info?.state === "stopped" || info?.state === undefined || info?.state === "idle"
+      ? actionsHtml([["start", "启动服务"], ["open-browser", "浏览器打开"], ["show-logs", "查看日志"]])
+      : "";
   return `<div class="launcher">
   <div class="hint">
     <h1>DeepSeek Harness</h1>
-    <p>服务未运行。</p>
+    <p>${hintText}</p>
+    ${hintActions}
   </div>
   ${project}
   ${status}
