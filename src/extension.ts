@@ -45,6 +45,9 @@ export function activate(context: vscode.ExtensionContext): void {
       panel.update(info);
       launcher.update(info);
       if (info.state === "running" && info.url !== undefined) {
+        // 把当前 VS Code 项目注册为 dsh workspace（workspace.create 幂等，
+        // 不创建会话）——侧栏的 workspace 分组立即可见该项目。
+        void ensureProjectWorkspace();
         // 2.0.0: the chat lives in the editor tab and the sidebar column in
         // the launcher — open the editor tab once the server is up.
         if (!panelAutoOpened) {
@@ -140,6 +143,21 @@ export function activate(context: vscode.ExtensionContext): void {
     const project = workspaceCwd();
     manager.setProject(project);
     log(`workspaceCwd: ${project}`);
+  }
+
+  /** Register the current VS Code project as a dsh workspace once the server
+   *  is up. workspace.create is idempotent and creates no session; the GUI
+   *  sidebar then shows the project group immediately, and sessions created
+   *  from it are bound to the project directory (session.header.cwd). */
+  let registeredProject = "";
+  async function ensureProjectWorkspace(): Promise<void> {
+    const project = workspaceCwd();
+    if (project === "" || project === registeredProject) return;
+    const workspaceId = await manager.ensureWorkspace(project);
+    if (workspaceId !== undefined) {
+      registeredProject = project;
+      log(`project workspace ready: ${project} -> ${workspaceId}`);
+    }
   }
 
   function isDarkTheme(): boolean {
