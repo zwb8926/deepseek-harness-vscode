@@ -66,6 +66,18 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
       ' position: fixed !important; inset: 0 !important;' +
       ' visibility: visible !important; pointer-events: auto !important; }' +
+    // Settings popovers are React portals into the body, so they live in the
+    // body's stacking context. The off-screen sidebar subtree (parent of the
+    // settings panel) also competes at the body level via its z-index bump.
+    // The popover's own z-index is 1100; without this rule the rows inside
+    // the off-screen panel paint over the popover because the panel itself
+    // creates a stacking context (z-index:1, position:relative) that is
+    // taller than the sidebar's own z-index. Force the popover out of that
+    // competition with a topmost z-index so the dropdown menu wins.
+    'html[data-dsh-panel="center"] [role="menu"],' +
+    'html[data-dsh-panel="center"] [role="listbox"],' +
+    'html[data-dsh-panel="center"] [role="dialog"] {' +
+      ' z-index: 2147483647 !important; }' +
     'html[data-dsh-panel="center"] [class$="_frame"] > [class$="_handle"][data-side="sidebar"]' +
       ' { display: none !important; }' +
     'html[data-dsh-panel="center"] [class*="centerCol"] { grid-column: 1 / 3 !important; }';
