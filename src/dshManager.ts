@@ -491,10 +491,15 @@ export class DshManager {
     }
 
     // 2. Resolve the CLI.
+    // Preserve awaitingExternal here: if the spawn path below fails (port
+    // TIME_WAIT, EADDRINUSE, missing module, …) the watch must keep
+    // re-probing the configured port, otherwise a recovered external
+    // server (or a port that becomes free later) would never be picked up
+    // again. The flag is cleared only when the spawn actually succeeds
+    // (see below, after the child is bound to the URL).
     this.external = false;
     this.url = undefined;
     this.panelSupport = undefined;
-    this.awaitingExternal = false;
     this.setState("locating");
     const cli = await this.resolveCli();
     if (cli === undefined) {
@@ -594,6 +599,10 @@ export class DshManager {
     if (this.disposed || this.child !== child) return;
     const url = this.url;
     if (url === undefined) return;
+    // The spawn path is now bound to a live, owned child — clear the
+    // watch's "look for an external server on the configured port" hint so
+    // a future re-probe doesn't re-adopt the very server we just started.
+    this.awaitingExternal = false;
     this.setState("starting");
 
     // Health check: the root must answer 200 with the SPA.
@@ -688,6 +697,17 @@ export class DshManager {
         this.autoRestartCount = 0;
         this.panelSupport = await this.ensurePanelSupport(candidate);
         this.setState("running");
+      } else if (this.state === "stopped" && this.child === undefined && (this.autoRestartCount ?? 0) < MAX_AUTO_RESTARTS) {
+        // No external server is answering on the configured port and the
+        // auto-restart budget is not yet exhausted: kick a fresh start() so
+        // the manager tries to spawn its own dsh. Without this, a manager
+        // that burned its scheduleRestart budget on EADDRINUSE / module-load
+        // failures would stay "stopped" forever even after the port freed
+        // up; here we keep the recovery loop alive on every watch tick
+        // (5s) until either a spawn succeeds or an external server returns.
+        this.opts.log(`watch: no external dsh on ${candidate} — re-attempting start()`);
+        this.autoRestartCount += 1;
+        void this.start().catch((err) => this.opts.log(`watch: start retry failed: ${String(err)}`));
       }
     }
   }
