@@ -1,4 +1,4 @@
-﻿// Shared split-panel adapter for the dsh web frontend.
+// Shared split-panel adapter for the dsh web frontend.
 //
 // DeepSeek Harness for VS Code embeds the dsh GUI twice: the sidebar column
 // (sessions / workspaces list) inside the VS Code sidebar, and the center
@@ -61,8 +61,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
       ' width: 300px !important; height: 100% !important;' +
       ' overflow: visible !important;' +
-      ' visibility: hidden !important; pointer-events: none !important;' +
-      ' z-index: 2147483647 !important; }' +
+      ' visibility: hidden !important; pointer-events: none !important; }' +
     'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
       ' position: fixed !important; inset: 0 !important;' +
       ' visibility: visible !important; pointer-events: auto !important; }' +

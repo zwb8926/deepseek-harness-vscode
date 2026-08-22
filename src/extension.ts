@@ -82,15 +82,29 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Activity-bar whale icon → sidebar panel with session controls; the chat
   // itself always opens as a full editor tab.
+  let launcherFirstReveal = true;
   const launcher = new LauncherViewProvider(
     (action: PanelAction) => {
       void handlePanelAction(action);
     },
-    // Whenever the launcher becomes visible (e.g. right after VS Code opens),
-    // re-attempt adopt-or-start so the sidebar never stays stuck on
-    // "服务未运行" while a dsh server is reachable on port 3080.
+    // Whenever the launcher becomes visible:
+    //   - on the first reveal of the session, start the server (if not
+    //     already running) AND open the chat editor tab so the user has
+    //     the conversation ready to go;
+    //   - on every subsequent re-probe, just re-attempt adopt-or-start
+    //     so the sidebar never stays stuck on "服务未运行" while a dsh
+    //     server is reachable on port 3080. We do NOT re-open the
+    //     editor tab on every visibility flip — that would pop the
+    //     chat back to the front any time the user clicks the
+    //     activity-bar icon.
     () => {
-      if (getCfg("autoStart", true) && !manager.running) {
+      if (!getCfg("autoStart", true)) return;
+      if (launcherFirstReveal) {
+        launcherFirstReveal = false;
+        void ensureStarted()
+          .catch((err) => log(`launcher-open auto-start failed: ${String(err)}`))
+          .finally(() => { void openChatInEditor(); });
+      } else if (!manager.running) {
         void ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
       }
     }
