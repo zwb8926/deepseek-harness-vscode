@@ -58,8 +58,8 @@ button {
 button:hover { background: var(--vscode-button-hoverBackground); }
 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
 button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-.launcher { display: flex; flex-direction: column; height: 100%; }
-.launcher iframe { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--vscode-editor-background); }
+.launcher { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.launcher iframe { flex: 1 1 0; min-height: 0; width: 100%; border: 0; background: var(--vscode-editor-background); }
 .launcher .status {
   flex: none; font-size: 11px; line-height: 1.5; padding: 6px 8px; border-radius: 0;
   border-top: 1px solid var(--vscode-widget-border, transparent);
