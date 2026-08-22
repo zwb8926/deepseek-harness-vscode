@@ -1,4 +1,4 @@
-// Shared split-panel adapter for the dsh web frontend.
+﻿// Shared split-panel adapter for the dsh web frontend.
 //
 // DeepSeek Harness for VS Code embeds the dsh GUI twice: the sidebar column
 // (sessions / workspaces list) inside the VS Code sidebar, and the center
@@ -8,10 +8,11 @@
 // servers). It reads `?dshPanel=sidebar|center` and adapts the AppFrame
 // three-column grid with CSS only:
 //
-//   - sidebar: drop the center and details columns, hide the sidebar's own
-//     collapse/expand toggle (the launcher is always expanded), and let the
-//     sidebar column fill the iframe width so it tracks the VS Code sidebar
-//     as the user drags its edge.
+//   - sidebar: keep only the sidebar column and force the frame to the wide
+//     breakpoint (SIDEBAR_AUTO_COLLAPSE = 1024px) so the sidebar renders
+//     expanded instead of collapsing to the 56px rail in a narrow viewport.
+//     The sidebar's own collapse/expand toggle (the rail chevron at the top
+//     right) is hidden — the launcher is always expanded.
 //   - center: drop the sidebar column (and its drag handle) and let the
 //     conversation span tracks 1-2; the details column keeps its live width
 //     on track 3. The sidebar column is kept in the DOM (off-screen, hidden,
@@ -52,36 +53,16 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     'html[data-dsh-panel="sidebar"] [class*="centerCol"],' +
     'html[data-dsh-panel="sidebar"] [class*="detailsCol"],' +
     'html[data-dsh-panel="sidebar"] [class$="_frame"] > [class$="_handle"],' +
-    // The dsh sidebar has a "收起侧边栏 / 展开侧边栏" toggle (class
-    // hHd-Xa_toggle in 0.1.1-rc.2). In sidebar mode the extension owns
-    // the rail, so hide every variant of the toggle.
-    'html[data-dsh-panel="sidebar"] button[aria-label="收起侧边栏"],' +
-    'html[data-dsh-panel="sidebar"] button[aria-label="展开侧边栏"],' +
-    'html[data-dsh-panel="sidebar"] [class*="_toggle"] { display: none !important; }' +
-    // The dsh AppFrame is a 3-column grid (sidebar | center | details)
-    // with a hard min-width of 1024px and a fixed 280px sidebar column.
-    // In sidebar mode the launcher is a single column that has to track
-    // the VS Code sidebar's width: override the frame and the sidebar
-    // column to fill 100% of the iframe. Also kill the min-width so a
-    // narrow launcher (e.g. 200px) does not get a horizontal scrollbar.
-    'html[data-dsh-panel="sidebar"] [class$="_frame"] {' +
-      ' display: block !important;' +
-      ' width: 100% !important;' +
-      ' min-width: 0 !important;' +
-      ' max-width: 100% !important;' +
-      ' grid-template-columns: 100% !important;' +
-    '}' +
-    'html[data-dsh-panel="sidebar"] [class*="sidebarCol"] {' +
-      ' width: 100% !important;' +
-      ' min-width: 0 !important;' +
-      ' max-width: 100% !important;' +
-    '}' +
+    'html[data-dsh-panel="sidebar"] button:has([class$="_railMark"])' +
+      ' { display: none !important; }' +
+    'html[data-dsh-panel="sidebar"] [class$="_frame"] { min-width: 1024px !important; }' +
     'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }' +
     'html[data-dsh-panel="center"] [class*="sidebarCol"] {' +
       ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
       ' width: 300px !important; height: 100% !important;' +
       ' overflow: visible !important;' +
-      ' visibility: hidden !important; pointer-events: none !important; }' +
+      ' visibility: hidden !important; pointer-events: none !important;' +
+      ' z-index: 2147483647 !important; }' +
     'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
       ' position: fixed !important; inset: 0 !important;' +
       ' visibility: visible !important; pointer-events: auto !important; }' +
@@ -96,7 +77,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     'html[data-dsh-panel="center"] [role="menu"],' +
     'html[data-dsh-panel="center"] [role="listbox"],' +
     'html[data-dsh-panel="center"] [role="dialog"] {' +
-      ' z-index: 2147483647 !important; }' + // also covers the nested delete-confirm dialog
+      ' z-index: 2147483647 !important; }' +
     'html[data-dsh-panel="center"] [class$="_frame"] > [class$="_handle"][data-side="sidebar"]' +
       ' { display: none !important; }' +
     'html[data-dsh-panel="center"] [class*="centerCol"] { grid-column: 1 / 3 !important; }';
@@ -148,52 +129,6 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
         postSessionSelected();
       }
     }, 400);
-    // The extension tells the launcher when the editor tab is closed so
-    // the sidebar can drop the "currently selected" highlight. The center
-    // (editor) panel is the writing side: when it goes away the sidebar
-    // should not show any session as active — there is no conversation
-    // panel open anywhere for the highlighted row to refer to.
-    //
-    // dsh always picks a default session on mount (the first one if
-    // localStorage is empty) and writes that back to localStorage, so
-    // clearing localStorage is a no-op — dsh restores it on the next
-    // render. The only way to suppress the visual highlight without
-    // rebuilding dsh is a CSS override scoped to a body class that the
-    // launcher toggles on / off as the editor tab opens and closes.
-    var noTabStyle = document.createElement('style');
-    noTabStyle.id = 'dsh-no-tab';
-    noTabStyle.textContent = 'html.dsh-no-tab [class*="sessionRow"][class*="selected"],' +
-      ' html.dsh-no-tab [class*="sessionRow"][aria-selected="true"] {' +
-      ' background: transparent !important;' +
-      ' color: inherit !important;' +
-      ' box-shadow: none !important;' +
-      '}' +
-      'html.dsh-no-tab [class*="sessionRow"][class*="selected"] [class*="title"],' +
-      ' html.dsh-no-tab [class*="sessionRow"][class*="selected"] [class*="label"],' +
-      ' html.dsh-no-tab [class*="sessionRow"][class*="selected"] [class*="name"] {' +
-      ' color: inherit !important;' +
-      ' font-weight: normal !important;' +
-      '}';
-    window.addEventListener('message', function (e) {
-      var data = e.data;
-      if (data === null || typeof data !== "object" || data.source !== 'dsh-vscode-host') return;
-      if (data.type === 'session-closed') {
-        try { localStorage.removeItem('dsh.sessions.current'); } catch (e2) {}
-        last = null;
-        // Apply the no-highlight override. dsh will keep its own
-        // internal "current" pointer (and the editor-tab click path
-        // will still match against it), but the sidebar no longer
-        // paints it differently from the other rows.
-        document.documentElement.classList.add('dsh-no-tab');
-        if (!document.getElementById('dsh-no-tab')) {
-          document.head.appendChild(noTabStyle);
-        }
-      } else if (data.type === 'session-opened') {
-        // An editor tab is now showing a session — restore the real
-        // highlight so the user can see which row is "current".
-        document.documentElement.classList.remove('dsh-no-tab');
-      }
-    });
     document.addEventListener('click', function (e) {
       var t = e.target && e.target.closest ? e.target.closest(settingsTrigger) : null;
       if (t) {
