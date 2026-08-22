@@ -180,6 +180,7 @@ export function activate(context: vscode.ExtensionContext): void {
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
       case "open-chat":
+      case "open-settings":
         await openChatInEditor();
         break;
       case "start":

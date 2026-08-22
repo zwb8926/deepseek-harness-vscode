@@ -11,9 +11,13 @@
 //   - sidebar: keep only the sidebar column and force the frame to the wide
 //     breakpoint (SIDEBAR_AUTO_COLLAPSE = 1024px) so the sidebar renders
 //     expanded instead of collapsing to the 56px rail in a narrow viewport.
+//     The sidebar's own collapse/expand toggle (the rail chevron at the top
+//     right) is hidden — the launcher is always expanded.
 //   - center: drop the sidebar column (and its drag handle) and let the
 //     conversation span tracks 1-2; the details column keeps its live width
-//     on track 3.
+//     on track 3. The sidebar column is kept in the DOM (off-screen, hidden,
+//     inert) because the settings modal lives inside it; its overlay is
+//     re-enabled so the modal covers the editor tab.
 //
 // The current session selection is client-local (persisted under
 // `dsh.sessions.current`, no cross-tab live sync), so:
@@ -25,7 +29,12 @@
 //   - the sidebar panel polls `dsh.sessions.current` (the writing tab does
 //     not receive its own storage event) and posts a message to the VS Code
 //     webview host, which relays it to the extension so the editor tab opens
-//     or comes to the front when the user picks a session.
+//     or comes to the front when the user picks a session;
+//   - the settings trigger click is intercepted in the sidebar (the
+//     launcher's own narrow modal stays closed), a localStorage flag is set,
+//     and a message opens the editor tab; the center panel reacts to the
+//     flag and clicks its own (hidden) settings trigger so the modal opens
+//     in the wide editor tab.
 //
 // The marker below is used for idempotent patching and for capability
 // detection (the extension probes the served index for it).
@@ -43,15 +52,25 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   style.textContent =
     'html[data-dsh-panel="sidebar"] [class*="centerCol"],' +
     'html[data-dsh-panel="sidebar"] [class*="detailsCol"],' +
-    'html[data-dsh-panel="sidebar"] [class$="_frame"] > [class$="_handle"]' +
+    'html[data-dsh-panel="sidebar"] [class$="_frame"] > [class$="_handle"],' +
+    'html[data-dsh-panel="sidebar"] button:has([class$="_railMark"])' +
       ' { display: none !important; }' +
     'html[data-dsh-panel="sidebar"] [class$="_frame"] { min-width: 1024px !important; }' +
     'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }' +
-    'html[data-dsh-panel="center"] [class*="sidebarCol"],' +
+    'html[data-dsh-panel="center"] [class*="sidebarCol"] {' +
+      ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
+      ' width: 300px !important; height: 100% !important;' +
+      ' overflow: visible !important;' +
+      ' visibility: hidden !important; pointer-events: none !important; }' +
+    'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
+      ' position: fixed !important; inset: 0 !important;' +
+      ' visibility: visible !important; pointer-events: auto !important; }' +
     'html[data-dsh-panel="center"] [class$="_frame"] > [class$="_handle"][data-side="sidebar"]' +
       ' { display: none !important; }' +
     'html[data-dsh-panel="center"] [class*="centerCol"] { grid-column: 1 / 3 !important; }';
   document.head.appendChild(style);
+  var settingsKey = 'dsh.vscode.panel.settings';
+  var settingsTrigger = '[class$="_settingsArea"] button[aria-haspopup="dialog"]';
   if (panel === 'center') {
     var seen = null;
     try { seen = localStorage.getItem('dsh.sessions.current'); } catch (e) {}
@@ -60,11 +79,30 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       seen = e.newValue;
       location.reload();
     });
+    // Settings requested from the launcher: click the (hidden) settings
+    // trigger so the modal opens here, in the wide editor tab.
+    var openSettings = function () {
+      var tries = 30;
+      var attempt = function () {
+        var t = document.querySelector(settingsTrigger);
+        if (t) {
+          try { localStorage.removeItem(settingsKey); } catch (e2) {}
+          t.click();
+          return;
+        }
+        if (--tries > 0) setTimeout(attempt, 300);
+      };
+      attempt();
+    };
+    window.addEventListener('storage', function (e) {
+      if (e.key === settingsKey) openSettings();
+    });
+    try { if (localStorage.getItem(settingsKey) !== null) openSettings(); } catch (e) {}
   } else {
-    // Sidebar: tell the VS Code webview (and through it the extension) that
-    // the user picked a session, so the editor tab opens or comes to the
-    // front. The tab that wrote the key does not receive its own storage
-    // event, so poll for the change.
+    // Sidebar: report session picks and settings requests to the VS Code
+    // webview. The writing tab does not receive its own storage event, so
+    // the session selection is polled; the settings click is intercepted at
+    // capture time so the launcher's own narrow modal never opens.
     var last = null;
     try { last = localStorage.getItem('dsh.sessions.current'); } catch (e) {}
     setInterval(function () {
@@ -75,6 +113,14 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
         try { parent.postMessage({ source: 'dsh-vscode-panel', type: 'session-selected' }, '*'); } catch (e) {}
       }
     }, 400);
+    document.addEventListener('click', function (e) {
+      var t = e.target && e.target.closest ? e.target.closest(settingsTrigger) : null;
+      if (!t) return;
+      e.stopPropagation();
+      e.preventDefault();
+      try { localStorage.setItem(settingsKey, String(Date.now())); } catch (e2) {}
+      try { parent.postMessage({ source: 'dsh-vscode-panel', type: 'settings-selected' }, '*'); } catch (e2) {}
+    }, true);
   }
 })();
 </script>`;

@@ -10,7 +10,7 @@
 import type { DshRuntimeInfo } from "./dshManager";
 
 export interface PanelAction {
-  type: "new-session" | "open-chat" | "open-browser" | "start" | "stop" | "restart" | "reload" | "show-logs";
+  type: "new-session" | "open-chat" | "open-settings" | "open-browser" | "start" | "stop" | "restart" | "reload" | "show-logs";
 }
 
 const CSP = [
@@ -97,14 +97,16 @@ export function shellHtml(body: string, dark: boolean): string {
       vscode.postMessage({ type: b.getAttribute("data-cmd") });
     });
   });
-  // The embedded GUI iframe (sidebar panel) reports session picks — open or
-  // reveal the editor tab so the conversation is visible.
+  // The embedded GUI iframe (sidebar panel) reports session picks and
+  // settings requests — open or reveal the editor tab so the conversation /
+  // settings are visible.
   window.addEventListener("message", function (e) {
     const data = e.data;
-    if (data === null || typeof data !== "object" || data.source !== "dsh-vscode-panel" || data.type !== "session-selected") return;
+    if (data === null || typeof data !== "object" || data.source !== "dsh-vscode-panel") return;
     const frame = document.querySelector("iframe");
     if (frame === null || e.source !== frame.contentWindow) return;
-    vscode.postMessage({ type: "open-chat" });
+    if (data.type === "session-selected") vscode.postMessage({ type: "open-chat" });
+    else if (data.type === "settings-selected") vscode.postMessage({ type: "open-settings" });
   });
 })();
 </script>
