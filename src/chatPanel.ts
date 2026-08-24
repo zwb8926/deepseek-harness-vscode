@@ -84,6 +84,15 @@ export class ChatPanel {
     this.render();
   }
 
+  /** Post a message to the embedded dsh GUI iframe (panel-inject.js).
+   * The shell forwards host messages to the iframe, and panel-inject
+   * reacts — e.g. { type: "session-selected", sessionId } makes the
+   * editor show that conversation (native launcher tree click). */
+  postToGui(message: Record<string, unknown>): void {
+    if (this.panel === undefined) return;
+    void this.panel.webview.postMessage({ source: "dsh-vscode-host", ...message });
+  }
+
   reload(): void {
     this.render();
   }

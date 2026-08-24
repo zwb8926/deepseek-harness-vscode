@@ -445,10 +445,43 @@ export class DshManager {
     return value?.items;
   }
 
-  /** List all sessions with their cwd and updatedAt (to find a project's session). */
-  async listSessions(): Promise<Array<{ sessionId: string; updatedAt: number; cwd?: string; running?: boolean; blank?: boolean }> | undefined> {
-    const value = (await this.rpc("session.list", {})) as { items?: Array<{ sessionId: string; updatedAt: number; cwd?: string; running?: boolean; blank?: boolean }> } | undefined;
-    return value?.items;
+  /** List all sessions with their cwd and updatedAt (to find a project's session).
+   * Also surfaces the dsh title/stats projection best-effort so the native
+   * launcher tree can show human-readable titles without a second round trip. */
+  async listSessions(): Promise<
+    Array<{
+      sessionId: string;
+      updatedAt: number;
+      cwd?: string;
+      running?: boolean;
+      blank?: boolean;
+      title?: string;
+      turns?: number;
+      steps?: number;
+    }> | undefined
+  > {
+    const value = (await this.rpc("session.list", {})) as
+      | {
+          items?: Array<{
+            sessionId: string;
+            updatedAt: number;
+            cwd?: string;
+            running?: boolean;
+            blank?: boolean;
+            projections?: { values?: { title?: string; sessionStats?: { turns?: number; steps?: number } } };
+          }>;
+        }
+      | undefined;
+    return value?.items?.map((it) => ({
+      sessionId: it.sessionId,
+      updatedAt: it.updatedAt,
+      cwd: it.cwd,
+      running: it.running,
+      blank: it.blank,
+      title: it.projections?.values?.title,
+      turns: it.projections?.values?.sessionStats?.turns,
+      steps: it.projections?.values?.sessionStats?.steps
+    }));
   }
 
   /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */

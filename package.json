@@ -91,7 +91,6 @@
     "views": {
       "dsh": [
         {
-          "type": "webview",
           "id": "dsh.launcher",
           "name": "Launcher",
           "contextualTitle": "DeepSeek Harness"

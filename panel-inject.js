@@ -149,6 +149,22 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       seen = e.newValue;
       location.reload();
     });
+    // Native-launcher bridge: the VS Code extension (which owns the new
+    // TreeView sidebar now) posts { source: 'dsh-vscode-host', type:
+    // 'session-selected', sessionId } to the editor iframe when the user
+    // clicks a session in the native tree. Mirrors the sidebar's own
+    // storage write so the editor shows the selected conversation.
+    window.addEventListener('message', function (e) {
+      var d = e.data;
+      if (d === null || typeof d !== 'object' || d.source !== 'dsh-vscode-host') return;
+      if (d.type === 'session-selected' && typeof d.sessionId === 'string' && d.sessionId !== '') {
+        try {
+          localStorage.setItem('dsh.sessions.current', d.sessionId);
+          seen = d.sessionId;
+        } catch (e2) {}
+        location.reload();
+      }
+    });
     // Settings requested from the launcher: click the (hidden) settings
     // trigger so the modal opens here, in the wide editor tab.
     var openSettings = function () {

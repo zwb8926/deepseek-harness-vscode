@@ -10,8 +10,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { ChatPanel, PanelAction } from "./chatPanel";
-import { LauncherViewProvider } from "./chatView";
 import { DshManager, DshRuntimeInfo } from "./dshManager";
+import { LauncherTreeProvider } from "./launcherTree";
 
 function getCfg<T>(key: string, fallback: T): T {
   return vscode.workspace.getConfiguration("dsh").get<T>(key, fallback);
@@ -42,7 +42,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onInfo: (info) => {
       renderStatus(info);
       panel.update(info);
-      launcher.update(info);
+      launcherTree.updateState(info.state, info.url);
       if (info.state === "running" && info.url !== undefined) {
         // 把当前 VS Code 项目注册为 dsh workspace（workspace.create 幂等，
         // 不创建会话）——侧栏的 workspace 分组立即可见该项目。
@@ -54,6 +54,8 @@ export function activate(context: vscode.ExtensionContext): void {
         // Push the current VS Code theme into the dsh UI so the embedded
         // webview matches the user's color preference.
         void syncTheme();
+        // Populate the native tree immediately when the server is up.
+        void launcherTree.refresh();
       }
     },
     log
@@ -66,52 +68,52 @@ export function activate(context: vscode.ExtensionContext): void {
     context.extensionUri,
     // The editor tab is the only place where a "current session" makes
     // sense — when the user closes the tab there is no conversation
-    // panel left. Ask the launcher to drop its selected highlight so
-    // the sidebar does not show a session as active that has no
-    // editor tab open anywhere.
+    // panel left. (The native tree always shows its own state; nothing
+    // else needs to be told.)
     () => {
-      launcher.postToGui({ type: "session-closed" });
+      /* editor tab closed — tree keeps its own highlight-free state */
     },
     // A new editor tab is opening (or an existing one is being
-    // revealed). Restore the sidebar's normal highlight so the user
-    // can see which row is currently being shown.
+    // revealed). Nothing to push to the native tree.
     () => {
-      launcher.postToGui({ type: "session-opened" });
+      /* editor tab opened */
     }
   );
 
-  // Activity-bar whale icon → sidebar panel with session controls; the chat
-  // itself always opens as a full editor tab.
+  // Activity-bar whale icon → NATIVE tree view sidebar (no webview): server
+  // status, session list, workspace list. The chat itself always opens as a
+  // full editor tab. The tree polls the dsh RPC on an interval.
+  const launcherTree = new LauncherTreeProvider(manager);
+  launcherTree.start();
+  const launcherTreeView = vscode.window.createTreeView("dsh.launcher", {
+    treeDataProvider: launcherTree,
+    showCollapseAll: true
+  });
+  context.subscriptions.push(launcherTreeView, launcherTree);
+  // Opening the tree view (clicking the activity-bar icon) auto-starts the
+  // server if configured and shows fresh data.
   let launcherFirstReveal = true;
-  const launcher = new LauncherViewProvider(
-    (action: PanelAction) => {
-      void handlePanelAction(action);
-    },
-    // Whenever the launcher becomes visible:
-    //   - on the first reveal of the session, start the server (if not
-    //     already running) AND open the chat editor tab so the user has
-    //     the conversation ready to go;
-    //   - on every subsequent re-probe, just re-attempt adopt-or-start
-    //     so the sidebar never stays stuck on "服务未运行" while a dsh
-    //     server is reachable on port 3080. We do NOT re-open the
-    //     editor tab on every visibility flip — that would pop the
-    //     chat back to the front any time the user clicks the
-    //     activity-bar icon.
-    () => {
-      if (!getCfg("autoStart", true)) return;
-      if (launcherFirstReveal) {
-        launcherFirstReveal = false;
-        void ensureStarted()
-          .catch((err) => log(`launcher-open auto-start failed: ${String(err)}`))
-          .finally(() => { void openChatInEditor(); });
-      } else if (!manager.running) {
-        void ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
-      }
-    }
-  );
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcher, {
-      webviewOptions: { retainContextWhenHidden: true }
+    vscode.window.onDidChangeVisibleTextEditors(() => {
+      /* no-op: kept for reveal semantics below */
+    })
+  );
+  const launcherReveal = async (): Promise<void> => {
+    if (!getCfg("autoStart", true)) return;
+    if (launcherFirstReveal) {
+      launcherFirstReveal = false;
+      await ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
+      void openChatInEditor();
+    } else if (!manager.running) {
+      await ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
+    }
+    void launcherTree.refresh();
+  };
+  // TreeView has no "reveal" event; refresh whenever the view is focused
+  // (visibility events are not exposed, so the poll covers staleness).
+  context.subscriptions.push(
+    vscode.commands.registerCommand("dsh.launcher.focus", () => {
+      void launcherReveal();
     })
   );
 
@@ -167,6 +169,7 @@ export function activate(context: vscode.ExtensionContext): void {
   function refreshProject(): void {
     const project = workspaceCwd();
     manager.setProject(project);
+    launcherTree.setProject(project);
     log(`workspaceCwd: ${project}`);
   }
 
@@ -216,7 +219,7 @@ export function activate(context: vscode.ExtensionContext): void {
         break;
       case "reload":
         panel.reload();
-        launcher.reload();
+        void launcherTree.refresh();
         break;
       case "open-browser":
         await openInBrowser();
@@ -290,7 +293,22 @@ export function activate(context: vscode.ExtensionContext): void {
       await manager.start();
     }),
     vscode.commands.registerCommand("dsh.reloadPanel", () => panel.reload()),
-    vscode.commands.registerCommand("dsh.showLogs", () => output.show(true))
+    vscode.commands.registerCommand("dsh.showLogs", () => output.show(true)),
+    // Native launcher tree: click a session → open the editor tab and
+    // tell its embedded GUI to focus that conversation.
+    vscode.commands.registerCommand("dsh.openSession", async (sessionId: string) => {
+      if (typeof sessionId !== "string" || sessionId === "") return;
+      await openChatInEditor();
+      panel.postToGui({ type: "session-selected", sessionId });
+    }),
+    // Click a workspace → open a fresh conversation bound to it
+    // (best-effort: same editor tab; a blank conversation shows the
+    // workspace's contents).
+    vscode.commands.registerCommand("dsh.openWorkspace", async (workspaceId: string) => {
+      if (typeof workspaceId !== "string" || workspaceId === "") return;
+      await openChatInEditor();
+      panel.postToGui({ type: "session-selected", sessionId: "" });
+    })
   );
 
   context.subscriptions.push(
@@ -303,11 +321,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeActiveColorTheme(() => {
       void syncTheme();
       panel.reload();
-      launcher.reload();
+      void launcherTree.refresh();
     }),
     // Keep the launcher's project line in sync with the active editor.
     vscode.window.onDidChangeActiveTextEditor(() => {
       refreshProject();
+      void launcherTree.refresh();
     })
   );
 
