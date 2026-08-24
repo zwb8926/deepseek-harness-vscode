@@ -193,11 +193,19 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 });`;
 
-/** Split-panel iframe source for one panel mode, when the frontend supports it. */
-function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean): string {
+/** Split-panel iframe source for one panel mode, when the frontend supports it.
+ * When `sessionId` is given, the iframe is pinned to that conversation: the
+ * panel-inject script reads `?session=` and forces `dsh.sessions.current`,
+ * so each editor tab shows its OWN conversation (independent of the shared
+ * localStorage that the GUI sidebar writes). */
+function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean, sessionId?: string): string {
   if (!supported) return url;
   const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}dshPanel=${panel}`;
+  let src = `${url}${sep}dshPanel=${panel}`;
+  if (sessionId !== undefined && sessionId !== "") {
+    src += `&session=${encodeURIComponent(sessionId)}`;
+  }
+  return src;
 }
 
 /** Sidebar panel: the GUI's own sidebar column (sessions / workspaces). */
@@ -269,14 +277,15 @@ function stateLabelOf(info?: DshRuntimeInfo): string {
   }
 }
 
-/** Build the #stage body for one runtime state. */
-export function stateBody(info?: DshRuntimeInfo): string {
+/** Build the #stage body for one runtime state. When `sessionId` is given,
+ * the embedded GUI is pinned to that conversation (`?session=` param). */
+export function stateBody(info?: DshRuntimeInfo, sessionId?: string): string {
   switch (info?.state) {
     case "running": {
       const url = info.url ?? "";
       // Editor area = the GUI's center column (conversation + details), no
       // sidebar. Full GUI when the frontend lacks split-panel support.
-      const src = panelSrc(url, "center", info.panelSupport !== false);
+      const src = panelSrc(url, "center", info.panelSupport !== false, sessionId);
       return guiIframeHtml(src, "DeepSeek Harness");
     }
     case "locating":

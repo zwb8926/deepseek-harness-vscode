@@ -200,6 +200,22 @@ export function activate(context: vscode.ExtensionContext): void {
     await manager.applyTheme(isDarkTheme() ? "dark" : "light");
   }
 
+  /** Resolve a session's display title for its editor tab (best-effort). */
+  const sessionTitleCache = new Map<string, string>();
+  async function sessionTitle(sessionId: string): Promise<string | undefined> {
+    const cached = sessionTitleCache.get(sessionId);
+    if (cached !== undefined) return cached;
+    try {
+      const sessions = await manager.listSessions();
+      const found = sessions?.find((s) => s.sessionId === sessionId);
+      const title = found?.title ?? (found?.blank ? "新会话" : undefined);
+      if (title !== undefined) sessionTitleCache.set(sessionId, title);
+      return title;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
       case "open-chat":
@@ -294,35 +310,31 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("dsh.reloadPanel", () => panel.reload()),
     vscode.commands.registerCommand("dsh.showLogs", () => output.show(true)),
-    // Native launcher tree: click a session → open the editor tab and
-    // tell its embedded GUI to focus that conversation.
+    // Native launcher tree: click a session → open THAT conversation's
+    // own editor tab (pinned via ?session= — one page per session).
     vscode.commands.registerCommand("dsh.openSession", async (sessionId: string) => {
       if (typeof sessionId !== "string" || sessionId === "") return;
-      await openChatInEditor();
-      panel.postToGui({ type: "session-selected", sessionId });
+      if (!manager.running) await ensureStarted();
+      const title = await sessionTitle(sessionId);
+      panel.openSession(sessionId, title);
     }),
-    // Click a workspace → open a fresh conversation bound to it
-    // (best-effort: same editor tab; a blank conversation shows the
-    // workspace's contents).
+    // Click a workspace → open a fresh conversation bound to it.
     vscode.commands.registerCommand("dsh.openWorkspace", async (workspaceId: string) => {
       if (typeof workspaceId !== "string" || workspaceId === "") return;
-      await openChatInEditor();
-      panel.postToGui({ type: "session-selected", sessionId: "" });
+      if (!manager.running) await ensureStarted();
+      panel.open();
     }),
-    // Native launcher toolbar: "新建会话" (view/title menu). Creates a
-    // session in the current dsh workspace, opens the editor tab and
-    // shows the new conversation.
+    // Native launcher "新建会话": creates a session and opens its own tab.
     vscode.commands.registerCommand("dsh.newSession", async () => {
       if (!manager.running) await ensureStarted();
       const project = workspaceCwd();
       const sessionId = await manager.createSession(project);
-      await openChatInEditor();
       if (sessionId !== undefined) {
-        panel.postToGui({ type: "session-selected", sessionId });
+        panel.openSession(sessionId, "新会话");
       }
       void launcherTree.refresh();
     }),
-    // Native launcher tree "设置" row: open the editor tab and open the
+    // Native launcher "设置" row: open the default editor tab and open the
     // dsh settings modal there (handled by panel-inject open-settings).
     vscode.commands.registerCommand("dsh.openSettings", async () => {
       await openChatInEditor();

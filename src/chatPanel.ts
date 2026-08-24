@@ -1,7 +1,15 @@
 /**
- * ChatPanel — the VS Code editor-area webview that embeds the dsh web GUI.
- * The shared shell HTML lives in webviewHtml.ts; this class only owns the
- * WebviewPanel lifecycle.
+ * ChatPanel — owns the editor-area webviews that embed the dsh web GUI.
+ * The shared shell HTML lives in webviewHtml.ts.
+ *
+ * One WebviewPanel per conversation: clicking a session in the native
+ * launcher tree opens (or reveals) its OWN editor tab, pinned to that
+ * session via the `?session=` URL parameter — different sessions are
+ * different pages, and they do not fight over the shared localStorage
+ * (panel-inject ignores selection changes on pinned frames).
+ *
+ * A "default" panel (no pinned session, follows the GUI's current
+ * selection) is used for the plain Open Chat command / settings.
  */
 
 import * as vscode from "vscode";
@@ -16,122 +24,145 @@ export function vscodeThemeDark(): boolean {
   return kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
 }
 
+interface PanelHandle {
+  panel: vscode.WebviewPanel;
+  /** The conversation this panel is pinned to ("" = default/follows GUI). */
+  sessionId: string;
+  iframeReady: boolean;
+  pendingMessage?: Record<string, unknown>;
+}
+
+const DEFAULT_KEY = "__default__";
+
 export class ChatPanel {
-  private static readonly viewType = "dsh.chatPanel";
-  private panel?: vscode.WebviewPanel;
+  private readonly panels = new Map<string, PanelHandle>();
   private lastInfo?: DshRuntimeInfo;
 
   constructor(
     private readonly onAction: (action: PanelAction) => void,
     private readonly extensionUri: vscode.Uri,
-    /** Invoked when the editor tab is closed by the user. The launcher
-     *  sidebar uses this to clear the "currently selected" highlight in
-     *  the embedded dsh GUI — when there is no open editor tab, the
-     *  sidebar should not show any session as selected. */
     private readonly onDispose?: () => void,
-    /** Invoked when the editor tab is (re-)opened. Used by the launcher
-     *  to lift the no-highlight CSS override. */
     private readonly onOpen?: () => void
   ) {}
 
+  /** Open (or reveal) the default panel — follows the GUI's current
+   * session; used by Open Chat / status bar / settings. */
   open(): void {
-    if (this.panel === undefined) {
-      this.panel = vscode.window.createWebviewPanel(
-        ChatPanel.viewType,
-        "DeepSeek Harness",
-        // Full-width editor tab (like a file tab, Claude-style): opens in the
-        // active editor group without splitting.
-        vscode.ViewColumn.Active,
-        {
-          enableScripts: true,
-          retainContextWhenHidden: true,
-          localResourceRoots: []
-        }
-      );
-      this.panel.iconPath = {
-        light: vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon-black.png"),
-        dark: vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon-white.png")
-      };
-      const disposables: vscode.Disposable[] = [];
-      this.panel.onDidDispose(
-        () => {
-          this.panel = undefined;
-          this.iframeReady = false;
-          for (const d of disposables) d.dispose();
-          this.onDispose?.();
-        },
-        undefined,
-        disposables
-      );
-      this.panel.webview.onDidReceiveMessage(
-        (msg: unknown) => {
-          if (msg !== null && typeof msg === "object") {
-            const payload = msg as { source?: string; type?: string };
-            // The embedded GUI iframe finished loading (reported by the
-            // shell's IFRAME_READY_SCRIPT) → flush the pending host bridge
-            // message (e.g. session-selected from the native launcher tree).
-            if (payload.source === "dsh-vscode-panel" && payload.type === "iframe-ready") {
-              this.iframeReady = true;
-              this.flushPending();
-            }
-            if (typeof (msg as PanelAction).type === "string") {
-              this.onAction(msg as PanelAction);
-            }
-          }
-        },
-        undefined,
-        disposables
-      );
-    } else {
-      this.panel.reveal();
+    this.ensurePanel(DEFAULT_KEY, "DeepSeek Harness", "");
+  }
+
+  /** Open (or reveal) the panel pinned to one conversation. Different
+   * sessions get different editor tabs. */
+  openSession(sessionId: string, title?: string): void {
+    if (sessionId === "") return;
+    // If a panel for this session exists, reveal it and refresh the title.
+    const existing = this.panels.get(sessionId);
+    if (existing !== undefined) {
+      if (title !== undefined && title !== "") existing.panel.title = title;
+      existing.panel.reveal();
+      this.renderHandle(existing);
+      return;
     }
-    this.render();
+    this.ensurePanel(sessionId, title !== undefined && title !== "" ? title : "DeepSeek Harness", sessionId);
+  }
+
+  /** A panel is pinned to a session when `sessionId` is non-empty. */
+  private ensurePanel(key: string, title: string, sessionId: string): void {
+    const existing = this.panels.get(key);
+    if (existing !== undefined) {
+      existing.panel.reveal();
+      this.renderHandle(existing);
+      this.onOpen?.();
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      "dsh.chatPanel",
+      title,
+      // Full-width editor tab (like a file tab, Claude-style): opens in the
+      // active editor group without splitting.
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: []
+      }
+    );
+    panel.iconPath = {
+      light: vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon-black.png"),
+      dark: vscode.Uri.joinPath(this.extensionUri, "media", "dsh-icon-white.png")
+    };
+    const handle: PanelHandle = { panel, sessionId, iframeReady: false };
+    this.panels.set(key, handle);
+    const disposables: vscode.Disposable[] = [];
+    panel.onDidDispose(
+      () => {
+        this.panels.delete(key);
+        for (const d of disposables) d.dispose();
+        this.onDispose?.();
+      },
+      undefined,
+      disposables
+    );
+    panel.webview.onDidReceiveMessage(
+      (msg: unknown) => {
+        if (msg === null || typeof msg !== "object") return;
+        const payload = msg as { source?: string; type?: string };
+        if (payload.source === "dsh-vscode-panel" && payload.type === "iframe-ready") {
+          handle.iframeReady = true;
+          this.flushPending(handle);
+        }
+        if (typeof (msg as PanelAction).type === "string") {
+          this.onAction(msg as PanelAction);
+        }
+      },
+      undefined,
+      disposables
+    );
+    this.renderHandle(handle);
     this.onOpen?.();
   }
 
-  /** Re-render (also used as "reload panel" — a fresh iframe means a fresh page). */
+  /** Re-render every open panel (used on server state changes). */
   update(info?: DshRuntimeInfo): void {
     this.lastInfo = info;
-    this.render();
+    for (const handle of this.panels.values()) {
+      this.renderHandle(handle);
+    }
   }
 
-  /** Post a message to the embedded dsh GUI iframe (panel-inject.js).
-   * The shell forwards host messages to the iframe, and panel-inject
-   * reacts — e.g. { type: "session-selected", sessionId } makes the
-   * editor show that conversation (native launcher tree click).
-   *
-   * The message is queued until the iframe reports ready: when the
-   * editor tab was just opened, the iframe (and its panel-inject
-   * listener) may not exist yet, so an immediate postMessage would be
-   * lost. Iframe-ready (IFRAME_READY_SCRIPT) flushes the queue. */
-  postToGui(message: Record<string, unknown>): void {
-    if (this.panel === undefined) return;
-    this.pendingMessage = { source: "dsh-vscode-host", ...message };
-    if (this.iframeReady) this.flushPending();
+  /** Post a host message to ONE panel (default: the default panel).
+   * Queued until that panel's iframe reports ready. */
+  postToGui(message: Record<string, unknown>, sessionId?: string): void {
+    const key = sessionId !== undefined && sessionId !== "" ? sessionId : DEFAULT_KEY;
+    const handle = this.panels.get(key);
+    if (handle === undefined) return;
+    handle.pendingMessage = { source: "dsh-vscode-host", ...message };
+    if (handle.iframeReady) this.flushPending(handle);
   }
 
-  private iframeReady = false;
-  private pendingMessage?: Record<string, unknown>;
-
-  private flushPending(): void {
-    if (this.panel === undefined) return;
-    if (this.pendingMessage === undefined) return;
-    const msg = this.pendingMessage;
-    this.pendingMessage = undefined;
-    void this.panel.webview.postMessage(msg);
+  private flushPending(handle: PanelHandle): void {
+    if (handle.pendingMessage === undefined) return;
+    const msg = handle.pendingMessage;
+    handle.pendingMessage = undefined;
+    void handle.panel.webview.postMessage(msg);
   }
 
   reload(): void {
-    this.render();
+    for (const handle of this.panels.values()) {
+      this.renderHandle(handle);
+    }
   }
 
-  private render(): void {
-    if (this.panel === undefined) return;
+  /** True when at least one panel is open (for "open vs create" logic). */
+  get hasAny(): boolean {
+    return this.panels.size > 0;
+  }
+
+  private renderHandle(handle: PanelHandle): void {
     // A fresh html means a fresh iframe (and a fresh panel-inject
     // listener) — wait for the next iframe-ready before delivering
-    // host messages. The pending message survives the re-render and is
-    // flushed once the new frame is ready.
-    this.iframeReady = false;
-    this.panel.webview.html = shellHtml(stateBody(this.lastInfo), vscodeThemeDark());
+    // host messages. The pending message survives the re-render.
+    handle.iframeReady = false;
+    handle.panel.webview.html = shellHtml(stateBody(this.lastInfo, handle.sessionId), vscodeThemeDark());
   }
 }

@@ -142,10 +142,25 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   var settingsKey = 'dsh.vscode.panel.settings';
   var settingsTrigger = '[class$="_settingsArea"] button[aria-haspopup="dialog"]';
   if (panel === 'center') {
+    // Pinned session: when the URL carries ?session=<id> (each editor tab
+    // built by the native launcher tree pins one conversation), this frame
+    // ALWAYS shows that conversation. It writes dsh.sessions.current on
+    // load (once) and then ignores storage changes / host session-selected
+    // messages — otherwise every open tab would fight over the shared
+    // localStorage and reload each other.
+    var pinned = new URLSearchParams(location.search).get('session') || '';
     var seen = null;
     try { seen = localStorage.getItem('dsh.sessions.current'); } catch (e) {}
+    if (pinned !== '') {
+      if (seen !== pinned) {
+        try { localStorage.setItem('dsh.sessions.current', pinned); } catch (e2) {}
+        location.reload();
+        return;
+      }
+    }
     window.addEventListener('storage', function (e) {
       if (e.key !== 'dsh.sessions.current' || e.newValue === seen) return;
+      if (pinned !== '') return; // pinned tabs ignore global selection changes
       seen = e.newValue;
       location.reload();
     });
@@ -158,7 +173,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     window.addEventListener('message', function (e) {
       var d = e.data;
       if (d === null || typeof d !== 'object' || d.source !== 'dsh-vscode-host') return;
-      if (d.type === 'session-selected' && typeof d.sessionId === 'string' && d.sessionId !== '') {
+      if (d.type === 'session-selected' && typeof d.sessionId === 'string' && d.sessionId !== '' && pinned === '') {
         try {
           localStorage.setItem('dsh.sessions.current', d.sessionId);
           seen = d.sessionId;
