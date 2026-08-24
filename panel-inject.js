@@ -86,11 +86,23 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       ' { display: none !important; }' +
     'html[data-dsh-panel="sidebar"] [class$="_frame"] { min-width: 1024px !important; }' +
     'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }' +
+    // The settings modal lives INSIDE the off-screen sidebar column. The
+    // column's position:fixed creates its own stacking context (z-index:
+    // auto — treated as 0 at the body level), so the always-on
+    // role rules (presentation 1000 / dialog 2000) only order things
+    // INSIDE that subtree: the settings panel loses to any body-level
+    // layer the editor column paints (composer z:1, conversation panel
+    // z:100, message-feedback note z:1100), i.e. the settings modal is
+    // covered by the chat UI in the editor tab. Fix: lift the off-screen
+    // sidebar column itself above the editor content (z-index 1500 —
+    // above everything the center column paints, below the dialog layer
+    // at 2000, so delete confirmations still cover the settings panel).
     'html[data-dsh-panel="center"] [class*="sidebarCol"] {' +
       ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
       ' width: 300px !important; height: 100% !important;' +
       ' overflow: visible !important;' +
-      ' visibility: hidden !important; pointer-events: none !important; }' +
+      ' visibility: hidden !important; pointer-events: none !important;' +
+      ' z-index: 1500 !important; }' +
     'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
       ' position: fixed !important; inset: 0 !important;' +
       ' visibility: visible !important; pointer-events: auto !important; }' +
