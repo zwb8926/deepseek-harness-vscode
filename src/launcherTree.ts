@@ -75,6 +75,7 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
   private status: { state: string; url?: string } = { state: "idle" };
   private sessions: SessionInfo[] = [];
   private workspaces: WorkspaceInfo[] = [];
+  private archived = new Set<string>();
   private projectPath = "";
   private timer?: NodeJS.Timeout;
   private refreshing = false;
@@ -122,12 +123,15 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
     if (this.refreshing || !this.manager.running) return;
     this.refreshing = true;
     try {
-      const [sessions, workspaces] = await Promise.all([
+      const [sessions, baseline] = await Promise.all([
         this.manager.listSessions(),
         this.manager.listWorkspaces()
       ]);
       if (sessions !== undefined) this.sessions = this.decorateSessions(sessions);
-      if (workspaces !== undefined) this.workspaces = workspaces.map((w) => ({ ...w }));
+      if (baseline !== undefined) {
+        this.archived = new Set(baseline.archivedSessionIds);
+        this.workspaces = baseline.items.map((w) => ({ ...w }));
+      }
       this._onDidChangeTreeData.fire(undefined);
     } catch {
       /* polling errors are transient; keep the last good data */
@@ -203,8 +207,11 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
         return this.workspaces.map((workspace) => ({ kind: "workspace" as const, workspace }));
       case "workspace": {
         const ids = new Set(element.workspace.sessionIds);
+        // Workspaces must not show archived sessions — the dsh GUI sidebar
+        // filters exactly the same way (sessionVisible: origin !== subagent
+        // && !archived.has(id) && (!blank || id === current)).
         return this.sessions
-          .filter((s) => ids.has(s.sessionId))
+          .filter((s) => ids.has(s.sessionId) && !this.archived.has(s.sessionId))
           .map((session) => ({ kind: "session" as const, session }));
       }
       default:
@@ -271,7 +278,10 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
     );
     item.id = `workspace-${w.workspaceId}`;
     item.iconPath = new vscode.ThemeIcon("folder", new vscode.ThemeColor("charts.blue"));
-    if (w.sessionIds.length > 0) item.description = `${w.sessionIds.length} 个会话`;
+    // Count only the sessions actually listed under this workspace
+    // (archived sessions do not count — they are hidden).
+    const visibleCount = w.sessionIds.filter((id) => !this.archived.has(id) && this.sessions.some((s) => s.sessionId === id)).length;
+    if (visibleCount > 0) item.description = `${visibleCount} 个会话`;
     item.tooltip = w.path;
     item.command = {
       command: "dsh.openWorkspace",

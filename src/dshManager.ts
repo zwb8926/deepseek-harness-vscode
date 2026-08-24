@@ -439,10 +439,28 @@ export class DshManager {
     return this.createSession(path);
   }
 
-  /** List the real workspace records (verification/diagnostics). */
-  async listWorkspaces(): Promise<Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }> | undefined> {
-    const value = (await this.rpc("workspace.list", {})) as { items?: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }> } | undefined;
-    return value?.items;
+  /** List the real workspace records (verification/diagnostics).
+   * Also returns the registry-global archive set (the same `archivedSessionIds`
+   * the GUI sidebar uses to hide archived sessions: a session bound to a
+   * workspace is only visible when it is not in this set). */
+  async listWorkspaces(): Promise<
+    | {
+        items: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
+        archivedSessionIds: string[];
+      }
+    | undefined
+  > {
+    const value = (await this.rpc("workspace.list", {})) as
+      | {
+          items?: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
+          archivedSessionIds?: string[];
+        }
+      | undefined;
+    if (value === undefined) return undefined;
+    return {
+      items: value.items ?? [],
+      archivedSessionIds: value.archivedSessionIds ?? []
+    };
   }
 
   /** List all sessions with their cwd and updatedAt (to find a project's session).
