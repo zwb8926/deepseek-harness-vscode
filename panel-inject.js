@@ -49,47 +49,29 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   // Always-on stacking-context fixes: dsh web's Modal container, the
   // settings overlay (VOzbGW_overlay), and the [role="dialog"] inside
   // Modal all use z-index values in the 1000–2147483647 range in the
-  // bundle. The settings panel (VOzbGW_panel) sits at z-index:1 inside
-  // the overlay. When a Modal opens from inside the settings overlay the
-  // React portal appends the Modal root to the body, and the resulting
-  // stacking competition between Modal (1000), settings overlay (1000),
-  // and any other same-level viewer (image lightbox, attachment preview,
-  // message-feedback note at 1100) is decided by DOM order alone — which
-  // is fragile and breaks depending on which element was mounted last.
+  // bundle, so DOM order alone decides which one paints on top — fragile,
+  // and it breaks depending on which element was mounted last.
   //
-  // To remove the competition entirely, every panel-injected / Modal-
-  // injected layer is pinned to z-index:1. That keeps the modal /
-  // confirmation dialog / dropdown menu at the lowest stacking level so
-  // nothing in the page UI gets painted over by accident. The interactive
-  // stacking within the panel itself (panel content above its mask) is
-  // preserved by the bundle's own z-index rules.
+  // Fix: pin the modal layers to a fixed, stable priority by ARIA role:
+  //   - [role="presentation"]  → z-index: 2000  (modal stage / overlay /
+  //     mask container — the settings overlay, Modal root, etc.)
+  //   - [role="dialog"]        → z-index: 1000  (modal dialog content —
+  //     confirmations, delete dialogs, etc.)
+  // The presentation layer (2000) sits above every dialog (1000), so the
+  // mask and the panel it frames always cover the dialogs nested inside
+  // any other layer, and nothing competes on DOM order anymore.
   //
   // These rules are global (not gated on the dshPanel parameter) so that
   // dsh web opened directly in a browser (no split-panel) also gets the
   // same stable layering.
   var alwaysOn =
-    // Force every panel-injected / Modal-injected layer to z-index:1, the
-    // lowest stacking level. dsh web uses Modal for delete confirmations
-    // and a settings overlay (VOzbGW_overlay) for the settings panel; both
-    // are position:fixed with z-index:1000 in the bundle, so DOM order
-    // alone decides which one paints on top. Pinning every layer to 1
-    // removes that competition — whichever element the user is interacting
-    // with sits at the same level as everything else, and the page UI
-    // underneath is never painted over.
-    '[class*="VOzbGW_"][class*="_overlay"],' +
-    '[class^="VOzbGW_"][class*="_overlay"],' +
-    '[class*="VOzbGW_overlay"],' +
-    '[class*="VOzbGW_"][class*="_panel"],' +
-    '[class^="VOzbGW_"][class*="_panel"],' +
-    '[class*="VOzbGW_panel"],' +
-    '[class*="_root_15u5s_"],' +
-    '[class*="_root_"][class*="_15u5s"]' +
-      ' { z-index: 1 !important; }' +
-    // The [role="dialog"] inside the Modal: also pin to z-index:1 so the
-    // confirmation dialog (deleteDialog) cannot escape the panel.
-    '[class*="_root_15u5s_"] [role="dialog"],' +
-    '[class*="_root_"][class*="_15u5s"] [role="dialog"]' +
-      ' { z-index: 1 !important; }';
+    // Modal stage / overlay / mask containers (role="presentation").
+    '[role="presentation"]' +
+      ' { z-index: 2000 !important; }' +
+    // Modal dialog content (role="dialog"): confirmations, delete dialogs,
+    // model pickers, etc. Sit below the presentation layer, above page UI.
+    '[role="dialog"]' +
+      ' { z-index: 1000 !important; }';
   var style = document.createElement('style');
   style.textContent = alwaysOn;
   document.head.appendChild(style);
