@@ -30,6 +30,10 @@ interface PanelHandle {
   sessionId: string;
   iframeReady: boolean;
   pendingMessage?: Record<string, unknown>;
+  /** Seed the selection once (no pinning) on the next render. */
+  seedSessionId?: string;
+  /** Auto-open the settings modal in the loaded page (URL param). */
+  openSettings?: boolean;
 }
 
 const DEFAULT_KEY = "__default__";
@@ -45,10 +49,18 @@ export class ChatPanel {
     private readonly onOpen?: () => void
   ) {}
 
-  /** Open (or reveal) the default panel — follows the GUI's current
-   * session; used by Open Chat / status bar / settings. */
-  open(): void {
-    this.ensurePanel(DEFAULT_KEY, "DeepSeek Harness", "");
+  /** Open (or reveal) the default panel — follows the GUI's current session
+   * once seeded; used by Open Chat / status bar / settings.
+   * `seedSessionId` points the panel at a known-good conversation so the
+   * editor never falls back to a stale blank "new session" view;
+   * `openSettings` auto-opens the settings modal in the loaded page. */
+  open(seedSessionId?: string, openSettings = false): void {
+    this.ensurePanel(DEFAULT_KEY, "DeepSeek Harness", "", { seedSessionId, openSettings });
+  }
+
+  /** Convenience: open the default panel with the settings modal. */
+  openSettings(seedSessionId?: string): void {
+    this.open(seedSessionId, true);
   }
 
   /** Open (or reveal) the panel pinned to one conversation. Different
@@ -67,11 +79,11 @@ export class ChatPanel {
   }
 
   /** A panel is pinned to a session when `sessionId` is non-empty. */
-  private ensurePanel(key: string, title: string, sessionId: string): void {
+  private ensurePanel(key: string, title: string, sessionId: string, opts?: { seedSessionId?: string; openSettings?: boolean }): void {
     const existing = this.panels.get(key);
     if (existing !== undefined) {
       existing.panel.reveal();
-      this.renderHandle(existing);
+      this.renderHandle(existing, opts);
       this.onOpen?.();
       return;
     }
@@ -118,7 +130,7 @@ export class ChatPanel {
       undefined,
       disposables
     );
-    this.renderHandle(handle);
+    this.renderHandle(handle, opts);
     this.onOpen?.();
   }
 
@@ -164,11 +176,22 @@ export class ChatPanel {
     return this.panels.size > 0;
   }
 
-  private renderHandle(handle: PanelHandle): void {
+  private renderHandle(handle: PanelHandle, opts?: { seedSessionId?: string; openSettings?: boolean }): void {
+    if (opts !== undefined) {
+      if (opts.seedSessionId !== undefined) handle.seedSessionId = opts.seedSessionId;
+      if (opts.openSettings === true) handle.openSettings = true;
+    }
     // A fresh html means a fresh iframe (and a fresh panel-inject
     // listener) — wait for the next iframe-ready before delivering
     // host messages. The pending message survives the re-render.
     handle.iframeReady = false;
-    handle.panel.webview.html = shellHtml(stateBody(this.lastInfo, handle.sessionId), vscodeThemeDark());
+    // openSettings is one-shot: the settings modal opens on THIS load only,
+    // so later re-renders (server state changes) do not reopen it.
+    const openSettings = handle.openSettings === true;
+    if (openSettings) handle.openSettings = false;
+    handle.panel.webview.html = shellHtml(
+      stateBody(this.lastInfo, handle.sessionId, { seedSession: handle.seedSessionId, openSettings }),
+      vscodeThemeDark()
+    );
   }
 }

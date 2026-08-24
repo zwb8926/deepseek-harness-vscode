@@ -197,14 +197,21 @@ document.addEventListener("DOMContentLoaded", function () {
  * When `sessionId` is given, the iframe is pinned to that conversation: the
  * panel-inject script reads `?session=` and forces `dsh.sessions.current`,
  * so each editor tab shows its OWN conversation (independent of the shared
- * localStorage that the GUI sidebar writes). */
-function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean, sessionId?: string): string {
+ * localStorage that the GUI sidebar writes). `opts.seedSession` writes the
+ * same selection ONCE but leaves the tab following the GUI (used by the
+ * default/settings tab so it never falls back to a stale new-session view);
+ * `opts.openSettings` makes panel-inject click the settings trigger at boot
+ * (no host-message timing involved). */
+function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean, sessionId?: string, opts?: { seedSession?: string; openSettings?: boolean }): string {
   if (!supported) return url;
   const sep = url.includes("?") ? "&" : "?";
   let src = `${url}${sep}dshPanel=${panel}`;
-  if (sessionId !== undefined && sessionId !== "") {
-    src += `&session=${encodeURIComponent(sessionId)}`;
+  const sid = sessionId ?? opts?.seedSession;
+  if (sid !== undefined && sid !== "") {
+    src += `&session=${encodeURIComponent(sid)}`;
+    if (sessionId === undefined) src += "&seed=1";
   }
+  if (opts?.openSettings === true) src += "&openSettings=1";
   return src;
 }
 
@@ -278,14 +285,16 @@ function stateLabelOf(info?: DshRuntimeInfo): string {
 }
 
 /** Build the #stage body for one runtime state. When `sessionId` is given,
- * the embedded GUI is pinned to that conversation (`?session=` param). */
-export function stateBody(info?: DshRuntimeInfo, sessionId?: string): string {
+ * the embedded GUI is pinned to that conversation (`?session=` param).
+ * `opts.seedSession` seeds the selection once without pinning; `opts.openSettings`
+ * auto-opens the settings modal in the loaded page. */
+export function stateBody(info?: DshRuntimeInfo, sessionId?: string, opts?: { seedSession?: string; openSettings?: boolean }): string {
   switch (info?.state) {
     case "running": {
       const url = info.url ?? "";
       // Editor area = the GUI's center column (conversation + details), no
       // sidebar. Full GUI when the frontend lacks split-panel support.
-      const src = panelSrc(url, "center", info.panelSupport !== false, sessionId);
+      const src = panelSrc(url, "center", info.panelSupport !== false, sessionId, opts);
       return guiIframeHtml(src, "DeepSeek Harness");
     }
     case "locating":

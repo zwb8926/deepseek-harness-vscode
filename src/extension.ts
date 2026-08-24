@@ -96,8 +96,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // the server if configured and open the chat for the first time.
   let launcherFirstReveal = true;
 
+  // The last real conversation the user opened — used to seed the default
+  // panel so it never falls back to a stale blank "new session" view.
+  let lastSessionId = "";
+
   async function openChatInEditor(): Promise<void> {
-    panel.open();
+    panel.open(lastSessionId === "" ? undefined : lastSessionId);
     if (getCfg("autoStart", true) && !manager.running) {
       await ensureStarted();
     }
@@ -198,8 +202,10 @@ export function activate(context: vscode.ExtensionContext): void {
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
       case "open-chat":
-      case "open-settings":
         await openChatInEditor();
+        break;
+      case "open-settings":
+        await openSettingsFlow();
         break;
       case "start":
         await ensureStarted();
@@ -281,7 +287,10 @@ export function activate(context: vscode.ExtensionContext): void {
   async function newSessionIn(cwd?: string): Promise<void> {
     if (!manager.running) await ensureStarted();
     const sessionId = await manager.createSession(cwd);
-    if (sessionId !== undefined) panel.openSession(sessionId, "新会话");
+    if (sessionId !== undefined) {
+      lastSessionId = sessionId;
+      panel.openSession(sessionId, "新会话");
+    }
     void launcherView.refresh();
   }
 
@@ -289,8 +298,10 @@ export function activate(context: vscode.ExtensionContext): void {
   async function newSessionInWorkspace(workspaceId: string): Promise<void> {
     if (!manager.running) await ensureStarted();
     const sessionId = await manager.createSessionForWorkspace(workspaceId);
-    if (sessionId !== undefined) panel.openSession(sessionId, "新会话");
-    else void vscode.window.showErrorMessage("无法在当前工作区创建会话");
+    if (sessionId !== undefined) {
+      lastSessionId = sessionId;
+      panel.openSession(sessionId, "新会话");
+    } else void vscode.window.showErrorMessage("无法在当前工作区创建会话");
     void launcherView.refresh();
   }
 
@@ -299,12 +310,16 @@ export function activate(context: vscode.ExtensionContext): void {
     if (typeof sessionId !== "string" || sessionId === "") return;
     if (!manager.running) await ensureStarted();
     if (title === undefined) title = await sessionTitle(sessionId);
+    lastSessionId = sessionId;
     panel.openSession(sessionId, title);
   }
 
   async function openSettingsFlow(): Promise<void> {
     await openChatInEditor();
-    panel.postToGui({ type: "open-settings" });
+    // The settings modal opens via the page's own URL param (?openSettings=1)
+    // — no host-message timing. The default panel is seeded with the last
+    // real session so the editor shows a conversation, not a new-session view.
+    panel.openSettings(lastSessionId === "" ? undefined : lastSessionId);
   }
 
   /** 重命名会话: input box → sessions.rename RPC. */
@@ -335,7 +350,8 @@ export function activate(context: vscode.ExtensionContext): void {
       return;
     }
     await launcherView.refresh();
-    await panel.openSession(childId, await sessionTitle(childId));
+    lastSessionId = childId;
+    await panel.openSession(childId, (await sessionTitle(childId)) ?? "分叉会话");
   }
 
   /** 归档会话: workspace.archiveSession, then refresh (row disappears). */
@@ -410,7 +426,7 @@ export function activate(context: vscode.ExtensionContext): void {
           case "workspace":
             if (event.workspaceId !== undefined) {
               if (!manager.running) await ensureStarted();
-              panel.open();
+              panel.open(lastSessionId === "" ? undefined : lastSessionId);
             }
             break;
         }

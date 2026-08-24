@@ -175,8 +175,14 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     // ALWAYS shows that conversation. It writes dsh.sessions.current on
     // load (once) and then ignores storage changes / host session-selected
     // messages — otherwise every open tab would fight over the shared
-    // localStorage and reload each other.
-    var pinned = new URLSearchParams(location.search).get('session') || '';
+    // localStorage and reload each other. With &seed=1 the selection is
+    // written once too, but the frame KEEPS following the global selection
+    // (used by the default/settings tab: it shows the last real session
+    // instead of a stale blank new-session view). &openSettings=1 opens
+    // the settings modal at boot (self-contained, no host message timing).
+    var qs = new URLSearchParams(location.search);
+    var pinned = qs.get('session') || '';
+    var isPinned = pinned !== '' && qs.get('seed') !== '1';
     var seen = readCurrent();
     if (pinned !== '') {
       if (seen !== pinned) {
@@ -189,7 +195,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       if (e.key !== currentKey) return;
       var next = idOf(e.newValue);
       if (next === seen) return;
-      if (pinned !== '') return; // pinned tabs ignore global selection changes
+      if (isPinned) return; // pinned tabs ignore global selection changes
       seen = next;
       location.reload();
     });
@@ -202,7 +208,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     window.addEventListener('message', function (e) {
       var d = e.data;
       if (d === null || typeof d !== 'object' || d.source !== 'dsh-vscode-host') return;
-      if (d.type === 'session-selected' && typeof d.sessionId === 'string' && d.sessionId !== '' && pinned === '') {
+      if (d.type === 'session-selected' && typeof d.sessionId === 'string' && d.sessionId !== '' && !isPinned) {
         writeCurrent(d.sessionId);
         seen = d.sessionId;
         location.reload();
@@ -229,6 +235,10 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       if (e.key === settingsKey) openSettings();
     });
     try { if (localStorage.getItem(settingsKey) !== null) openSettings(); } catch (e) {}
+    // &openSettings=1: the settings tab asks for the settings modal directly
+    // at boot — the extension no longer depends on the host-message bridge
+    // (iframe-ready timing) for this.
+    if (qs.get('openSettings') === '1') openSettings();
   } else {
     // Sidebar: report session picks and settings requests to the VS Code
     // webview. The writing tab does not receive its own storage event, so
