@@ -8,6 +8,13 @@ tsconfig.json
 .gitignore
 smoke-notes.md
 
+# Bundled portable node runtime lives in vendor/node/ on the dev side for
+# development convenience; the packaged extension never reads it (the
+# extension's own node runtime + the user's PATH node handle dsh spawns).
+# Shipping a 91 MB node.exe would double the vsix and exceed the marketplace
+# 250 MB bound the moment a future dsh bumps a large dep.
+vendor/**
+
 # node_modules ships (bundled @deepseek-ai/dsh), but trim what runtime never reads.
 # Source maps, type definitions, test/doc scaffolding and debug symbols are
 # pure build/dev artifacts and have no place in a 250 MB-bounded extension.
