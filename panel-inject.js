@@ -56,7 +56,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   //   - [role="dialog"]          → z-index: 2000  (modal dialog content —
   //     confirmations, delete dialogs, etc. — TOPMOST layer)
   //   - body > [role="presentation"] → z-index: 1600 (the Modal portal
-  //     container React appends to <body>; must sit ABOVE the off-screen
+  //     container React appends to BODY; must sit ABOVE the off-screen
   //     sidebar column (1500) in center mode or the whole Modal subtree —
   //     including its inner dialog at 2000 — is covered by the settings
   //     panel)
@@ -76,7 +76,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     // model pickers, etc. Topmost layer.
     '[role="dialog"]' +
       ' { z-index: 2000 !important; }' +
-    // The Modal portal container React appends directly to <body>. It wraps
+    // The Modal portal container React appends directly to BODY. It wraps
     // the dialog, so it must be above the off-screen sidebar column (1500)
     // in ?dshPanel=center — otherwise the whole Modal (dialog included) is
     // layered under the settings panel.
