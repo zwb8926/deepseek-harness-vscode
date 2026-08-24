@@ -53,13 +53,20 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   // and it breaks depending on which element was mounted last.
   //
   // Fix: pin the modal layers to a fixed, stable priority by ARIA role:
-  //   - [role="dialog"]        → z-index: 2000  (modal dialog content —
+  //   - [role="dialog"]          → z-index: 2000  (modal dialog content —
   //     confirmations, delete dialogs, etc. — TOPMOST layer)
-  //   - [role="presentation"]  → z-index: 1000  (modal stage / overlay /
-  //     mask container — the settings overlay, Modal root, etc.)
-  // The dialog layer (2000) sits above the presentation layer (1000), so
-  // the confirmation dialog always paints on top of the settings panel
-  // and its mask, and nothing competes on DOM order anymore.
+  //   - body > [role="presentation"] → z-index: 1600 (the Modal portal
+  //     container React appends to <body>; must sit ABOVE the off-screen
+  //     sidebar column (1500) in center mode or the whole Modal subtree —
+  //     including its inner dialog at 2000 — is covered by the settings
+  //     panel)
+  //   - [role="presentation"]    → z-index: 1000  (modal stage / overlay /
+  //     mask container nested inside another layer — settings overlay,
+  //     Modal root's children, etc.)
+  // The dialog layer (2000) sits above the body-level Modal container
+  // (1600), which sits above the settings panel layer (1500) which sits
+  // above the editor content (≤1100): 编辑区 < settings面板 < Modal容器 <
+  // deleteDialog.
   //
   // These rules are global (not gated on the dshPanel parameter) so that
   // dsh web opened directly in a browser (no split-panel) also gets the
@@ -69,7 +76,14 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     // model pickers, etc. Topmost layer.
     '[role="dialog"]' +
       ' { z-index: 2000 !important; }' +
-    // Modal stage / overlay / mask containers (role="presentation").
+    // The Modal portal container React appends directly to <body>. It wraps
+    // the dialog, so it must be above the off-screen sidebar column (1500)
+    // in ?dshPanel=center — otherwise the whole Modal (dialog included) is
+    // layered under the settings panel.
+    'body > [role="presentation"]' +
+      ' { z-index: 1600 !important; }' +
+    // Modal stage / overlay / mask containers (role="presentation") nested
+    // inside another layer (settings overlay, Modal root's mask, etc.).
     '[role="presentation"]' +
       ' { z-index: 1000 !important; }';
   var style = document.createElement('style');
