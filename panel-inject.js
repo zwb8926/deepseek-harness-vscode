@@ -53,24 +53,24 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   // and it breaks depending on which element was mounted last.
   //
   // Fix: pin the modal layers to a fixed, stable priority by ARIA role:
-  //   - [role="presentation"]  → z-index: 2000  (modal stage / overlay /
+  //   - [role="dialog"]        → z-index: 2000  (modal dialog content —
+  //     confirmations, delete dialogs, etc. — TOPMOST layer)
+  //   - [role="presentation"]  → z-index: 1000  (modal stage / overlay /
   //     mask container — the settings overlay, Modal root, etc.)
-  //   - [role="dialog"]        → z-index: 1000  (modal dialog content —
-  //     confirmations, delete dialogs, etc.)
-  // The presentation layer (2000) sits above every dialog (1000), so the
-  // mask and the panel it frames always cover the dialogs nested inside
-  // any other layer, and nothing competes on DOM order anymore.
+  // The dialog layer (2000) sits above the presentation layer (1000), so
+  // the confirmation dialog always paints on top of the settings panel
+  // and its mask, and nothing competes on DOM order anymore.
   //
   // These rules are global (not gated on the dshPanel parameter) so that
   // dsh web opened directly in a browser (no split-panel) also gets the
   // same stable layering.
   var alwaysOn =
+    // Modal dialog content (role="dialog"): confirmations, delete dialogs,
+    // model pickers, etc. Topmost layer.
+    '[role="dialog"]' +
+      ' { z-index: 2000 !important; }' +
     // Modal stage / overlay / mask containers (role="presentation").
     '[role="presentation"]' +
-      ' { z-index: 2000 !important; }' +
-    // Modal dialog content (role="dialog"): confirmations, delete dialogs,
-    // model pickers, etc. Sit below the presentation layer, above page UI.
-    '[role="dialog"]' +
       ' { z-index: 1000 !important; }';
   var style = document.createElement('style');
   style.textContent = alwaysOn;
