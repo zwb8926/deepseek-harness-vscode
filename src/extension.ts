@@ -308,6 +308,19 @@ export function activate(context: vscode.ExtensionContext): void {
       if (typeof workspaceId !== "string" || workspaceId === "") return;
       await openChatInEditor();
       panel.postToGui({ type: "session-selected", sessionId: "" });
+    }),
+    // Native launcher toolbar: "新建会话" (view/title menu). Creates a
+    // session in the current dsh workspace, opens the editor tab and
+    // shows the new conversation.
+    vscode.commands.registerCommand("dsh.newSession", async () => {
+      if (!manager.running) await ensureStarted();
+      const project = workspaceCwd();
+      const sessionId = await manager.createSession(project);
+      await openChatInEditor();
+      if (sessionId !== undefined) {
+        panel.postToGui({ type: "session-selected", sessionId });
+      }
+      void launcherTree.refresh();
     })
   );
 

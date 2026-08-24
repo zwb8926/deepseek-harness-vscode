@@ -144,6 +144,9 @@ export function shellHtml(body: string, dark: boolean): string {
       "'box-shadow: none !important;}';" +
     "document.head.appendChild(s);";
   document.head.appendChild(initial);
+  const ready = document.createElement("script");
+  ready.textContent = IFRAME_READY_SCRIPT;
+  document.head.appendChild(ready);
 })();
 </script>
 </body>
@@ -176,6 +179,19 @@ const IFRAME_ATTRS =
 function guiIframeHtml(src: string, title: string): string {
   return `<iframe title="${title}" src="${escapeHtml(src)}" ${IFRAME_ATTRS}></iframe>`;
 }
+
+/** Injected on every shell page: report when the embedded GUI iframe has
+ * finished loading so the extension knows it can deliver host messages
+ * (the panel-inject script must be running before a session-selected
+ * message lands — clicks from the native launcher tree depend on this). */
+const IFRAME_READY_SCRIPT = `
+document.addEventListener("DOMContentLoaded", function () {
+  var frame = document.querySelector("iframe");
+  if (frame === null) return;
+  frame.addEventListener("load", function () {
+    try { vscode.postMessage({ source: "dsh-vscode-panel", type: "iframe-ready" }); } catch (e) {}
+  });
+});`;
 
 /** Split-panel iframe source for one panel mode, when the frontend supports it. */
 function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean): string {

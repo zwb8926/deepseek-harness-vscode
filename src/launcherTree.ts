@@ -2,23 +2,24 @@
  * LauncherTreeProvider — the activity-bar sidebar panel behind the whale
  * icon, implemented with a NATIVE VS Code TreeView (no webview / no HTML).
  *
- * Layout follows the dsh GUI sidebar column (the old iframe look): a flat,
- * clean list —
- *   1. a one-line server status row (running/stopped/starting…);
- *   2. every session as a single row: title (or "新会话") + relative age
- *      ("刚刚" / "5 分钟前" / "2 小时前" / "3 天前"), an icon shows whether
- *      it is running (pulse) or blank (new);
- *   3. the "工作区" group: one row per dsh workspace (folder icon + name),
- *      sessions bound to it show as a small count in the description.
+ * Layout (mirrors the dsh GUI sidebar column):
+ *   1. a slim server status row (running/stopped/starting…) with the
+ *      resolved project name;
+ *   2. "新建会话" is a native toolbar button (view/title menu, command
+ *      dsh.newSession) — the tree itself starts with the "工作区" group;
+ *   3. "工作区" group, one row per dsh workspace, and each workspace
+ *      EXPANDS to show its bound sessions (title + relative age);
+ *   4. sessions that belong to no workspace land under the "其他会话"
+ *      group so nothing is hidden.
  *
  * Data comes from `DshManager.listSessions()` / `listWorkspaces()` (dsh
- * RPC) and polls on an interval (`refreshIntervalMs`, default 4000ms) —
- * dsh has no push channel to the extension host yet, polling is the
- * chosen refresh strategy.
+ * RPC) and polls every `refreshIntervalMs` (default 4000ms).
  *
  * Interactions:
  *   - click a session → open the editor tab for that conversation
- *     (host → iframe message bridge, handled by panel-inject.js);
+ *     (host → iframe message bridge: ChatPanel holds a pending message
+ *     until the embedded GUI reports iframe-ready, so clicks land even
+ *     when the editor tab was just opened);
  *   - click a workspace → open the editor tab;
  *   - click the status row → open chat (running) / start (stopped).
  */
@@ -52,8 +53,9 @@ export interface WorkspaceInfo {
 type Node =
   | { kind: "status" }
   | { kind: "workspaces-group" }
-  | { kind: "session"; session: SessionInfo }
-  | { kind: "workspace"; workspace: WorkspaceInfo };
+  | { kind: "other-group"; sessions: SessionInfo[] }
+  | { kind: "workspace"; workspace: WorkspaceInfo }
+  | { kind: "session"; session: SessionInfo };
 
 /** Short relative time, dsh-sidebar style: 刚刚 / N 分钟前 / N 小时前 / N 天前. */
 function relativeTime(ms: number): string {
@@ -163,6 +165,13 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
           collapsibleState: this.workspaces.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
           iconPath: new vscode.ThemeIcon("folder-library")
         };
+      case "other-group":
+        return {
+          id: "group-other",
+          label: "其他会话",
+          collapsibleState: element.sessions.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+          iconPath: new vscode.ThemeIcon("list-ordered")
+        };
       case "session":
         return this.sessionItem(element.session);
       case "workspace":
@@ -172,14 +181,24 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
 
   getChildren(element?: Node): Node[] {
     if (element === undefined) {
-      // Flat list like the dsh sidebar: status row first, then every
-      // session (no "会话" group — keeps it a clean continuous list),
-      // then the workspaces group at the bottom.
-      return [{ kind: "status" }, ...this.sessions.map((session) => ({ kind: "session" as const, session })), { kind: "workspaces-group" }];
+      const nodes: Node[] = [{ kind: "status" }, { kind: "workspaces-group" }];
+      const bound = new Set<string>();
+      for (const w of this.workspaces) for (const id of w.sessionIds) bound.add(id);
+      const orphan = this.sessions.filter((s) => !bound.has(s.sessionId));
+      if (orphan.length > 0) nodes.push({ kind: "other-group", sessions: orphan });
+      return nodes;
     }
     switch (element.kind) {
       case "workspaces-group":
         return this.workspaces.map((workspace) => ({ kind: "workspace" as const, workspace }));
+      case "workspace": {
+        const ids = new Set(element.workspace.sessionIds);
+        return this.sessions
+          .filter((s) => ids.has(s.sessionId))
+          .map((session) => ({ kind: "session" as const, session }));
+      }
+      case "other-group":
+        return element.sessions.map((session) => ({ kind: "session" as const, session }));
       default:
         return [];
     }
@@ -187,6 +206,13 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
 
   getParent?(element: Node): Node | undefined {
     if (element.kind === "workspace") return { kind: "workspaces-group" };
+    if (element.kind === "session") {
+      for (const w of this.workspaces) {
+        if (w.sessionIds.includes(element.session.sessionId)) return { kind: "workspace" as const, workspace: w };
+      }
+      const orphan = this.sessions.filter((s) => !this.workspaces.some((w) => w.sessionIds.includes(s.sessionId)));
+      if (orphan.some((s) => s.sessionId === element.session.sessionId)) return { kind: "other-group", sessions: orphan };
+    }
     return undefined;
   }
 
@@ -198,13 +224,12 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
     );
     item.id = "status-root";
     item.iconPath = new vscode.ThemeIcon(
-      state === "running" ? "zap" : state === "error" ? "error" : "circle-slash"
+      state === "running" ? "zap" : state === "error" ? "error" : "circle-slash",
+      state === "running" ? new vscode.ThemeColor("charts.green") : undefined
     );
     if (state === "running") {
       const port = this.status.url !== undefined ? new URL(this.status.url).port : "";
       item.description = this.projectPath !== "" ? `📁 ${path.basename(this.projectPath)}` : port !== "" ? `:${port}` : undefined;
-    } else {
-      item.description = this.status.url !== undefined ? this.status.url : undefined;
     }
     item.command = {
       command: state === "running" ? "dsh.openChat" : "dsh.start",
@@ -217,11 +242,13 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
   private sessionItem(s: SessionInfo): vscode.TreeItem {
     const item = new vscode.TreeItem(s.title, vscode.TreeItemCollapsibleState.None);
     item.id = `session-${s.sessionId}`;
-    // Icon mirrors the dsh sidebar: active session pulses, blank is a
-    // fresh "新会话" row.
-    item.iconPath = new vscode.ThemeIcon(s.running ? "pulse" : s.blank ? "add" : "archive");
+    // Icon + color like the dsh sidebar: active session is green/pulse,
+    // a fresh "新会话" is plus, otherwise archived grey.
+    if (s.blank) item.iconPath = new vscode.ThemeIcon("add", new vscode.ThemeColor("charts.yellow"));
+    else if (s.running) item.iconPath = new vscode.ThemeIcon("comment-discussion", new vscode.ThemeColor("charts.green"));
+    else item.iconPath = new vscode.ThemeIcon("archive", new vscode.ThemeColor("descriptionForeground"));
     item.description = relativeTime(s.updatedAt);
-    item.tooltip = `${s.title}\n${s.sessionId}${s.cwd !== undefined ? `\n${s.cwd}` : ""}`;
+    item.tooltip = `${s.title}\n${s.sessionId}${s.cwd !== undefined ? `\n${s.cwd}` : ""}${s.running ? "\n进行中" : ""}`;
     item.command = {
       command: "dsh.openSession",
       title: "打开会话",
@@ -234,10 +261,10 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
   private workspaceItem(w: WorkspaceInfo): vscode.TreeItem {
     const item = new vscode.TreeItem(
       w.title !== "" ? w.title : path.basename(w.path),
-      vscode.TreeItemCollapsibleState.None
+      vscode.TreeItemCollapsibleState.Expanded
     );
     item.id = `workspace-${w.workspaceId}`;
-    item.iconPath = new vscode.ThemeIcon("folder");
+    item.iconPath = new vscode.ThemeIcon("folder", new vscode.ThemeColor("charts.blue"));
     if (w.sessionIds.length > 0) item.description = `${w.sessionIds.length} 个会话`;
     item.tooltip = w.path;
     item.command = {

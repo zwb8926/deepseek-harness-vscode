@@ -77,8 +77,28 @@
         "title": "DeepSeek Harness: Show Logs",
         "category": "DSH",
         "icon": "$(output)"
+      },
+      {
+        "command": "dsh.newSession",
+        "title": "DeepSeek Harness: New Session",
+        "category": "DSH",
+        "icon": "$(new-file)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dsh.newSession",
+          "when": "view == dsh.launcher",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dsh.reloadPanel",
+          "when": "view == dsh.launcher",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {

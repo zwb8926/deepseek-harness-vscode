@@ -56,6 +56,7 @@ export class ChatPanel {
       this.panel.onDidDispose(
         () => {
           this.panel = undefined;
+          this.iframeReady = false;
           for (const d of disposables) d.dispose();
           this.onDispose?.();
         },
@@ -64,8 +65,18 @@ export class ChatPanel {
       );
       this.panel.webview.onDidReceiveMessage(
         (msg: unknown) => {
-          if (msg !== null && typeof msg === "object" && typeof (msg as PanelAction).type === "string") {
-            this.onAction(msg as PanelAction);
+          if (msg !== null && typeof msg === "object") {
+            const payload = msg as { source?: string; type?: string };
+            // The embedded GUI iframe finished loading (reported by the
+            // shell's IFRAME_READY_SCRIPT) → flush the pending host bridge
+            // message (e.g. session-selected from the native launcher tree).
+            if (payload.source === "dsh-vscode-panel" && payload.type === "iframe-ready") {
+              this.iframeReady = true;
+              this.flushPending();
+            }
+            if (typeof (msg as PanelAction).type === "string") {
+              this.onAction(msg as PanelAction);
+            }
           }
         },
         undefined,
@@ -87,10 +98,27 @@ export class ChatPanel {
   /** Post a message to the embedded dsh GUI iframe (panel-inject.js).
    * The shell forwards host messages to the iframe, and panel-inject
    * reacts — e.g. { type: "session-selected", sessionId } makes the
-   * editor show that conversation (native launcher tree click). */
+   * editor show that conversation (native launcher tree click).
+   *
+   * The message is queued until the iframe reports ready: when the
+   * editor tab was just opened, the iframe (and its panel-inject
+   * listener) may not exist yet, so an immediate postMessage would be
+   * lost. Iframe-ready (IFRAME_READY_SCRIPT) flushes the queue. */
   postToGui(message: Record<string, unknown>): void {
     if (this.panel === undefined) return;
-    void this.panel.webview.postMessage({ source: "dsh-vscode-host", ...message });
+    this.pendingMessage = { source: "dsh-vscode-host", ...message };
+    if (this.iframeReady) this.flushPending();
+  }
+
+  private iframeReady = false;
+  private pendingMessage?: Record<string, unknown>;
+
+  private flushPending(): void {
+    if (this.panel === undefined) return;
+    if (this.pendingMessage === undefined) return;
+    const msg = this.pendingMessage;
+    this.pendingMessage = undefined;
+    void this.panel.webview.postMessage(msg);
   }
 
   reload(): void {
@@ -99,6 +127,11 @@ export class ChatPanel {
 
   private render(): void {
     if (this.panel === undefined) return;
+    // A fresh html means a fresh iframe (and a fresh panel-inject
+    // listener) — wait for the next iframe-ready before delivering
+    // host messages. The pending message survives the re-render and is
+    // flushed once the new frame is ready.
+    this.iframeReady = false;
     this.panel.webview.html = shellHtml(stateBody(this.lastInfo), vscodeThemeDark());
   }
 }
