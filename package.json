@@ -2,7 +2,7 @@
   "name": "deepseekharness-for-vscode",
   "displayName": "DeepSeekHarness for VS Code",
   "description": "DeepSeek Harness inside VS Code: auto-starts (or adopts) the dsh web server, shows the sessions/workspaces sidebar column in the side bar and the chat (conversation + details) as an editor tab (Claude-style), with start/stop control, status bar, and open-in-browser.",
-  "version": "2026.8.240",
+  "version": "2026.8.241",
   "publisher": "zwb8926",
   "icon": "media/dsh-icon-outline.png",
   "license": "MIT",
