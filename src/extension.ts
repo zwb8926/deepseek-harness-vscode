@@ -321,6 +321,12 @@ export function activate(context: vscode.ExtensionContext): void {
         panel.postToGui({ type: "session-selected", sessionId });
       }
       void launcherTree.refresh();
+    }),
+    // Native launcher tree "设置" row: open the editor tab and open the
+    // dsh settings modal there (handled by panel-inject open-settings).
+    vscode.commands.registerCommand("dsh.openSettings", async () => {
+      await openChatInEditor();
+      panel.postToGui({ type: "open-settings" });
     })
   );
 

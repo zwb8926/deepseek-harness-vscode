@@ -154,6 +154,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     // 'session-selected', sessionId } to the editor iframe when the user
     // clicks a session in the native tree. Mirrors the sidebar's own
     // storage write so the editor shows the selected conversation.
+    // 'open-settings' opens the settings modal in the editor tab.
     window.addEventListener('message', function (e) {
       var d = e.data;
       if (d === null || typeof d !== 'object' || d.source !== 'dsh-vscode-host') return;
@@ -163,6 +164,8 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
           seen = d.sessionId;
         } catch (e2) {}
         location.reload();
+      } else if (d.type === 'open-settings') {
+        openSettings();
       }
     });
     // Settings requested from the launcher: click the (hidden) settings

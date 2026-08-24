@@ -83,22 +83,14 @@
         "title": "DeepSeek Harness: New Session",
         "category": "DSH",
         "icon": "$(new-file)"
+      },
+      {
+        "command": "dsh.openSettings",
+        "title": "DeepSeek Harness: Open Settings",
+        "category": "DSH",
+        "icon": "$(gear)"
       }
     ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "dsh.newSession",
-          "when": "view == dsh.launcher",
-          "group": "navigation@1"
-        },
-        {
-          "command": "dsh.reloadPanel",
-          "when": "view == dsh.launcher",
-          "group": "navigation@2"
-        }
-      ]
-    },
     "viewsContainers": {
       "activitybar": [
         {

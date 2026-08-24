@@ -52,8 +52,9 @@ export interface WorkspaceInfo {
 
 type Node =
   | { kind: "status" }
+  | { kind: "new-session" }
+  | { kind: "settings" }
   | { kind: "workspaces-group" }
-  | { kind: "other-group"; sessions: SessionInfo[] }
   | { kind: "workspace"; workspace: WorkspaceInfo }
   | { kind: "session"; session: SessionInfo };
 
@@ -158,19 +159,30 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
     switch (element.kind) {
       case "status":
         return this.statusItem();
+      case "new-session":
+        return {
+          id: "action-new-session",
+          label: "新建会话",
+          iconPath: new vscode.ThemeIcon("new-file", new vscode.ThemeColor("charts.green")),
+          command: { command: "dsh.newSession", title: "新建会话" },
+          collapsibleState: vscode.TreeItemCollapsibleState.None,
+          contextValue: "dshNewSession"
+        };
+      case "settings":
+        return {
+          id: "action-settings",
+          label: "设置",
+          iconPath: new vscode.ThemeIcon("settings-gear", new vscode.ThemeColor("descriptionForeground")),
+          command: { command: "dsh.openSettings", title: "设置" },
+          collapsibleState: vscode.TreeItemCollapsibleState.None,
+          contextValue: "dshSettings"
+        };
       case "workspaces-group":
         return {
           id: "group-workspaces",
           label: "工作区",
           collapsibleState: this.workspaces.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
           iconPath: new vscode.ThemeIcon("folder-library")
-        };
-      case "other-group":
-        return {
-          id: "group-other",
-          label: "其他会话",
-          collapsibleState: element.sessions.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
-          iconPath: new vscode.ThemeIcon("list-ordered")
         };
       case "session":
         return this.sessionItem(element.session);
@@ -181,12 +193,10 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
 
   getChildren(element?: Node): Node[] {
     if (element === undefined) {
-      const nodes: Node[] = [{ kind: "status" }, { kind: "workspaces-group" }];
-      const bound = new Set<string>();
-      for (const w of this.workspaces) for (const id of w.sessionIds) bound.add(id);
-      const orphan = this.sessions.filter((s) => !bound.has(s.sessionId));
-      if (orphan.length > 0) nodes.push({ kind: "other-group", sessions: orphan });
-      return nodes;
+      // Status row, then the action rows (新建会话 / 设置) in parallel,
+      // then the workspaces group. Unbound sessions are intentionally
+      // not shown (they belong to no workspace).
+      return [{ kind: "status" }, { kind: "new-session" }, { kind: "settings" }, { kind: "workspaces-group" }];
     }
     switch (element.kind) {
       case "workspaces-group":
@@ -197,8 +207,6 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
           .filter((s) => ids.has(s.sessionId))
           .map((session) => ({ kind: "session" as const, session }));
       }
-      case "other-group":
-        return element.sessions.map((session) => ({ kind: "session" as const, session }));
       default:
         return [];
     }
@@ -210,8 +218,6 @@ export class LauncherTreeProvider implements vscode.TreeDataProvider<Node> {
       for (const w of this.workspaces) {
         if (w.sessionIds.includes(element.session.sessionId)) return { kind: "workspace" as const, workspace: w };
       }
-      const orphan = this.sessions.filter((s) => !this.workspaces.some((w) => w.sessionIds.includes(s.sessionId)));
-      if (orphan.some((s) => s.sessionId === element.session.sessionId)) return { kind: "other-group", sessions: orphan };
     }
     return undefined;
   }
