@@ -153,6 +153,12 @@ export class ChatPanel {
     }
   }
 
+  /** Update the editor tab title of one session's panel (rename flow). */
+  setPanelTitle(sessionId: string, title: string): void {
+    const handle = this.panels.get(sessionId);
+    if (handle !== undefined && title !== "") handle.panel.title = title;
+  }
+
   /** True when at least one panel is open (for "open vs create" logic). */
   get hasAny(): boolean {
     return this.panels.size > 0;

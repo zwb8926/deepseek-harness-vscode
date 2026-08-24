@@ -412,6 +412,72 @@ export class DshManager {
     return value?.sessionId;
   }
 
+  /** Create a session directly inside an existing workspace record. */
+  async createSessionForWorkspace(workspaceId: string): Promise<string | undefined> {
+    const value = (await this.rpc("session.create", { workspaceId })) as { sessionId?: string } | undefined;
+    if (value?.sessionId === undefined) {
+      this.opts.log(`createSessionForWorkspace: could not create session in ${workspaceId}`);
+    }
+    return value?.sessionId;
+  }
+
+  /** Rename a session (sets its durable title). Returns whether the RPC succeeded. */
+  async renameSession(sessionId: string, title: string): Promise<boolean> {
+    const value = (await this.rpc("session.rename", { sessionId, title })) as { title?: string } | undefined;
+    if (value === undefined) {
+      this.opts.log(`renameSession: could not rename ${sessionId}`);
+      return false;
+    }
+    this.opts.log(`renameSession: ${sessionId} -> ${title}`);
+    return true;
+  }
+
+  /** Fork a session at its current tail (the child carries the history).
+   * Returns the child sessionId, or undefined on failure (e.g. blank session). */
+  async forkSession(sessionId: string): Promise<string | undefined> {
+    const value = (await this.rpc("session.fork", { sessionId })) as { sessionId?: string } | undefined;
+    if (value?.sessionId === undefined) {
+      this.opts.log(`forkSession: could not fork ${sessionId}`);
+    }
+    return value?.sessionId;
+  }
+
+  /** Archive a session into the registry-global archive set (hidden from the
+   * launcher/workspace lists, exactly like the dsh GUI sidebar). */
+  async archiveSession(sessionId: string): Promise<boolean> {
+    const value = (await this.rpc("workspace.archiveSession", { sessionId })) as
+      | { archivedSessionIds?: string[] }
+      | undefined;
+    if (value === undefined) {
+      this.opts.log(`archiveSession: could not archive ${sessionId}`);
+      return false;
+    }
+    this.opts.log(`archiveSession: ${sessionId} archived (${value.archivedSessionIds?.length ?? 0} total)`);
+    return true;
+  }
+
+  /** Rename a workspace record (display title). */
+  async renameWorkspace(workspaceId: string, title: string): Promise<boolean> {
+    const value = (await this.rpc("workspace.rename", { workspaceId, title })) as { workspace?: unknown } | undefined;
+    if (value === undefined) {
+      this.opts.log(`renameWorkspace: could not rename ${workspaceId}`);
+      return false;
+    }
+    this.opts.log(`renameWorkspace: ${workspaceId} -> ${title}`);
+    return true;
+  }
+
+  /** Delete a workspace registration (sessions/records are kept; they become ungrouped). */
+  async deleteWorkspace(workspaceId: string): Promise<boolean> {
+    const value = (await this.rpc("workspace.delete", { workspaceId })) as { deleted?: boolean } | undefined;
+    if (value?.deleted !== true) {
+      this.opts.log(`deleteWorkspace: could not delete ${workspaceId}`);
+      return false;
+    }
+    this.opts.log(`deleteWorkspace: ${workspaceId} deleted`);
+    return true;
+  }
+
   /** Ensure a real workspace record exists for `path` (idempotent); returns its workspaceId. */
   async ensureWorkspace(path: string): Promise<string | undefined> {
     const value = (await this.rpc("workspace.create", { path })) as
