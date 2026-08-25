@@ -73,7 +73,7 @@ const ICONS: Record<string, string> = {
   chat: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M2 2h12v9H6l-3.5 2.5V11H2V2z"/></svg>',
   edit: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M11.3 2.2 13.8 4.7 5.5 13H3v-2.5l8.3-8.3z"/></svg>',
   fork: '<svg viewBox="0 0 16 16" width="14" height="14"><circle cx="4.5" cy="3.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="11.5" cy="3.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="12.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/><path fill="none" stroke="currentColor" stroke-width="1.2" d="M4.5 5.1v2.2c0 1.6 1.2 2.8 2.8 2.8h1.4M11.5 5.1v2.2c0 1.6-1.2 2.8-2.8 2.8h-1.4"/></svg>',
-  archive: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M2.5 5.5h11v8h-11v-8zM2.5 3h11v2.5h-11V3zM3.5 8.5h2.5M7 8.5h2.5"/></svg>',
+  trash: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M3 4.5h10M5.5 4.5V2.8h5v1.7M4.2 4.5l.6 8.7h6.4l.6-8.7M6.5 7v4M9.5 7v4"/></svg>',
   more: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M8 2a1.2 1.2 0 1 1 0 2.4A1.2 1.2 0 0 1 8 2zm0 4.8a1.2 1.2 0 1 1 0 2.4A1.2 1.2 0 0 1 8 6.8zm0 4.8a1.2 1.2 0 1 1 0 2.4A1.2 1.2 0 0 1 8 11.6z"/></svg>'
 };
 
@@ -233,8 +233,16 @@ export function buildLauncherHtml(): string {
     }
     for (var w = 0; w < wsItems.length; w++) {
       var ws = wsItems[w];
+      // Only REAL sessions are listed: archived ones are hidden (like the GUI)
+      // and BLANK ones (created but never used — no content yet) are hidden
+      // too, exactly like the dsh sidebar's visibility rule.
       var visible = (ws.sessionIds || []).filter(function (id) {
-        return !archived[id] && d.sessions && d.sessions.some(function (s) { return s.sessionId === id; });
+        if (archived[id]) return false;
+        if (!d.sessions) return false;
+        for (var k = 0; k < d.sessions.length; k++) {
+          if (d.sessions[k].sessionId === id && d.sessions[k].blank !== true) return true;
+        }
+        return false;
       });
       var isOpen = expanded[ws.workspaceId] !== false; // default expanded
       out += '<div class="workspace' + (isOpen ? " open" : "") + '" data-ws="' + esc(ws.workspaceId) + '">';
@@ -267,7 +275,7 @@ export function buildLauncherHtml(): string {
           + '<span class="actions">'
           + '<button class="iconbtn" data-action="rename" data-session="' + esc(sess.sessionId) + '" data-title="' + esc(ttl) + '" title="重命名">' + ICONS.edit + "</button>"
           + '<button class="iconbtn" data-action="fork" data-session="' + esc(sess.sessionId) + '" title="分叉会话">' + ICONS.fork + "</button>"
-          + '<button class="iconbtn" data-action="archive" data-session="' + esc(sess.sessionId) + '" title="归档会话">' + ICONS.archive + "</button>"
+          + '<button class="iconbtn" data-action="archive" data-session="' + esc(sess.sessionId) + '" title="归档会话">' + ICONS.trash + "</button>"
           + "</span></div>";
       }
       out += "</div></div>";
