@@ -315,11 +315,15 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   async function openSettingsFlow(): Promise<void> {
-    await openChatInEditor();
-    // The settings modal opens via the page's own URL param (?openSettings=1)
-    // — no host-message timing. The default panel is seeded with the last
-    // real session so the editor shows a conversation, not a new-session view.
+    if (!manager.running) await ensureStarted();
+    // Single render carrying ?openSettings=1: the settings modal opens in the
+    // page itself at boot — no double-render, no host-message timing. The
+    // default panel is seeded with the last real session so the editor shows
+    // a conversation, not a new-session view.
     panel.openSettings(lastSessionId === "" ? undefined : lastSessionId);
+    // Fallback: a host message after iframe-ready re-requests the modal if a
+    // later re-render (state change) clobbered the URL-param boot.
+    panel.postToGui({ type: "open-settings" });
   }
 
   /** 重命名会话: input box → sessions.rename RPC. */

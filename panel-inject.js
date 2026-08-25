@@ -217,10 +217,13 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       }
     });
     // Settings requested from the launcher: click the (hidden) settings
-    // trigger so the modal opens here, in the wide editor tab.
+    // trigger so the modal opens here, in the wide editor tab. Idempotent:
+    // if a settings dialog is already open, do nothing — the URL-param boot
+    // and the fallback host message can both request it.
     var openSettings = function () {
       var tries = 30;
       var attempt = function () {
+        if (document.querySelector('[role="dialog"]')) return; // already open
         var t = document.querySelector(settingsTrigger);
         if (t) {
           try { localStorage.removeItem(settingsKey); } catch (e2) {}
