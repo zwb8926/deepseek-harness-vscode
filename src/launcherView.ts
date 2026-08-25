@@ -214,8 +214,11 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
   function esc(s) {
     return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-  function icon(kind, cls) {
-    return '<span class="codicon ' + (CODICONS[kind] || "codicon-circle-outline") + ' icon' + (cls ? " " + cls : "") + '"></span>';
+  function icon(kind, cls, extra) {
+    return '<span class="codicon ' + (CODICONS[kind] || "codicon-circle-outline") + ' icon' + (cls ? " " + cls : "") + (extra ? " " + extra : "") + '"></span>';
+  }
+  function chevronIcon() {
+    return icon("chevron", "", "chevron");
   }
   function rel(ms) {
     if (!Number.isFinite(ms) || ms <= 0) return "";
@@ -370,7 +373,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
       var isOpen = expanded[ws.workspaceId] !== false; // default expanded
       out2 += '<div class="workspace' + (isOpen ? " open" : "") + '" data-ws="' + esc(ws.workspaceId) + '">';
       out2 += '<div class="row ws-row' + (isOpen ? "" : " collapsed") + '" data-click="workspace" data-ws="' + esc(ws.workspaceId) + '" title="' + esc(ws.path) + '">'
-        + icon("chevron", "")
+        + chevronIcon()
         + icon("folder", "blue")
         + '<span class="label">' + esc(ws.title || (ws.path || "").split(/[\\\\/]/).pop()) + '</span>'
         + (visible.length > 0 ? '<span class="desc">' + visible.length + " 个会话</span>" : "")
