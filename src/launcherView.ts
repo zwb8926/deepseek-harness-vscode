@@ -61,7 +61,8 @@ export type LauncherEvent =
   | { type: "click"; kind: "status" | "new-session" | "settings" | "session" | "workspace"; sessionId?: string; workspaceId?: string }
   | { type: "action"; action: "rename" | "fork" | "archive"; sessionId: string; title?: string }
   | { type: "action"; action: "new-session"; workspaceId: string }
-  | { type: "action"; action: "rename-workspace" | "delete-workspace"; workspaceId: string; title?: string };
+  | { type: "action"; action: "rename-workspace" | "delete-workspace"; workspaceId: string; title?: string }
+  | { type: "search"; query: string };
 
 // ------------------------------------------------------------------ icons
 // All glyphs are official VS Code Codicons (media/codicon.ttf + the codicon
@@ -77,7 +78,8 @@ const CODICONS: Record<string, string> = {
   edit: "codicon-edit",
   fork: "codicon-git-branch",
   trash: "codicon-trash",
-  more: "codicon-ellipsis"
+  more: "codicon-ellipsis",
+  chevron: "codicon-chevron-down"
 };
 
 const VIEW_CSS = `
@@ -95,6 +97,7 @@ const VIEW_CSS = `
 .codicon-git-branch::before { content: "\\ea68"; }
 .codicon-trash::before { content: "\\ea81"; }
 .codicon-ellipsis::before { content: "\\ea7c"; }
+.codicon-chevron-down::before { content: "\\eab4"; }
 :root { color-scheme: light dark; }
 body { margin: 0; padding: 4px 4px 8px; font-family: var(--vscode-font-family, system-ui); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground); background: transparent; }
 .launcher { display: flex; flex-direction: column; gap: 1px; }
@@ -111,19 +114,31 @@ body { margin: 0; padding: 4px 4px 8px; font-family: var(--vscode-font-family, s
 .row .label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .desc { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
 .status-row .label { font-weight: 600; }
-/* top toolbar row: 新建会话 / 设置 — ALWAYS visible, side by side */
-.toolbar { display: flex; gap: 4px; padding: 2px 2px 5px; }
+/* top toolbar row: search box + 新建会话/设置 ICON buttons, always visible */
+.toolbar { display: flex; gap: 4px; padding: 2px 2px 5px; align-items: center; }
+input.search-input {
+  flex: 1 1 auto; min-width: 0; box-sizing: border-box; height: 26px;
+  padding: 2px 8px; border-radius: 5px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, rgba(128,128,128,0.35)));
+  background: var(--vscode-input-background, transparent);
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  font-size: 12px; outline: none;
+}
+input.search-input::placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
 button.toolbtn {
-  flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-  padding: 4px 6px; border-radius: 5px; border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35));
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 4px 7px; border-radius: 5px; border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35));
   background: var(--vscode-button-secondaryBackground, transparent);
   color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   font-size: 12px; cursor: pointer; min-width: 0;
 }
 button.toolbtn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.18)); }
-button.toolbtn .icon { width: 14px; height: 14px; }
-button.toolbtn .codicon { font-size: 14px; }
+button.toolbtn .icon { width: 15px; height: 15px; }
+button.toolbtn .codicon { font-size: 15px; }
 .section { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--vscode-descriptionForeground); padding: 6px 6px 2px; }
+/* expanded/collapsed chevron on workspace rows */
+.ws-row .chevron { flex: none; width: 14px; height: 14px; color: var(--vscode-descriptionForeground); transition: transform 0.12s ease; }
+.ws-row.collapsed .chevron { transform: rotate(-90deg); }
 /* hover-revealed action buttons (also pinned while its menu is open) */
 .actions { flex: none; display: none; gap: 2px; align-items: center; }
 .row:hover > .actions, .row:has(.more-menu.open) > .actions { display: flex; }
@@ -165,19 +180,45 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
 <style>${VIEW_CSS.replace(/__CODICON_FONT_URI__/g, fontUri)}</style>
 </head>
 <body>
-<div class="launcher" id="root"><div class="empty">加载中…</div></div>
+<div class="launcher" id="root">
+  <div class="row status-row" id="statusRow" data-click="status" title="DSH 状态">
+    <span id="statusIcon" class="codicon codicon-zap icon"></span>
+    <span class="label" id="statusLabel">DSH 空闲</span>
+    <span class="desc" id="statusProject"></span>
+  </div>
+  <div class="toolbar">
+    <input id="searchInput" class="search-input" type="text" placeholder="搜索会话…" spellcheck="false">
+    <button class="toolbtn" id="btnNewSession" data-click="new-session" title="新建会话"></button>
+    <button class="toolbtn" id="btnSettings" data-click="settings" title="设置"></button>
+  </div>
+  <div id="body"><div class="empty">加载中…</div></div>
+</div>
 <script>
 (function () {
   var vscode = acquireVsCodeApi();
-  var root = document.getElementById("root");
+  var statusRow = document.getElementById("statusRow");
+  var statusIcon = document.getElementById("statusIcon");
+  var statusLabel = document.getElementById("statusLabel");
+  var statusProject = document.getElementById("statusProject");
+  var bodyEl = document.getElementById("body");
+  var searchInput = document.getElementById("searchInput");
+  var btnNewSession = document.getElementById("btnNewSession");
+  var btnSettings = document.getElementById("btnSettings");
   var expanded = {}; // workspaceId -> true (default all expanded)
+  var searchQuery = "";
+  var searchResults = [];
+  var searchTimer = null;
+  var lastData = null;
   var CODICONS = ${JSON.stringify(CODICONS)};
 
   function esc(s) {
     return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-  function icon(kind, cls) {
-    return '<span class="codicon ' + (CODICONS[kind] || "codicon-circle-outline") + ' icon' + (cls ? " " + cls : "") + '"></span>';
+  function icon(kind, cls, extra) {
+    return '<span class="codicon ' + (CODICONS[kind] || "codicon-circle-outline") + ' icon' + (cls ? " " + cls : "") + (extra ? " " + extra : "") + '"></span>';
+  }
+  function chevronIcon() {
+    return icon("chevron", "", "chevron");
   }
   function rel(ms) {
     if (!Number.isFinite(ms) || ms <= 0) return "";
@@ -187,6 +228,10 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
     if (d < 86400000) return Math.floor(d / 3600000) + " 小时前";
     return Math.floor(d / 86400000) + " 天前";
   }
+  function toggleWorkspace(wsId) {
+    expanded[wsId] = !(expanded[wsId] !== false);
+    renderBody(lastData);
+  }
 
   function rowClick(ev) {
     var t = ev.target.closest ? ev.target.closest("[data-click]") : null;
@@ -194,7 +239,13 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
     // Clicks inside a row's action area are handled by actionClick (and must
     // NOT also open the row). Toolbar buttons carry data-click themselves.
     if (ev.target.closest && ev.target.closest(".actions")) return;
-    var msg = { type: "click", kind: t.getAttribute("data-click") };
+    var kind = t.getAttribute("data-click");
+    if (kind === "workspace" && t.getAttribute("data-ws")) {
+      // Workspace row click toggles the expand/collapse state (local).
+      toggleWorkspace(t.getAttribute("data-ws"));
+      return;
+    }
+    var msg = { type: "click", kind: kind };
     if (t.getAttribute("data-session")) msg.sessionId = t.getAttribute("data-session");
     if (t.getAttribute("data-ws")) msg.workspaceId = t.getAttribute("data-ws");
     vscode.postMessage(msg);
@@ -219,50 +270,98 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
     var menu2 = b.closest && b.closest(".more-menu");
     if (menu2) menu2.classList.remove("open");
   }
-  root.addEventListener("click", rowClick);
-  root.addEventListener("click", actionClick);
+  document.getElementById("root").addEventListener("click", rowClick);
+  document.getElementById("root").addEventListener("click", actionClick);
   document.addEventListener("click", function (e) {
     if (!e.target.closest || !e.target.closest(".more-menu")) {
       var open = document.querySelectorAll(".more-menu.open");
       for (var i = 0; i < open.length; i++) open[i].classList.remove("open");
     }
   });
+  // Toolbar icon buttons (no text) get their glyphs wired once.
+  btnNewSession.innerHTML = icon("plus", "green");
+  btnSettings.innerHTML = icon("gear", "");
+
+  // Search box: debounced, connected to the harness session search.
+  searchInput.addEventListener("input", function () {
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      searchTimer = null;
+      var q = searchInput.value.trim();
+      if (q === searchQuery) return;
+      vscode.postMessage({ type: "search", query: q });
+    }, 350);
+  });
 
   window.addEventListener("message", function (ev) {
     var d = ev.data;
-    if (!d || d.type !== "data") return;
-    render(d);
+    if (!d || typeof d !== "object") return;
+    if (d.type === "data") {
+      lastData = d;
+      render(d);
+    } else if (d.type === "search-results") {
+      searchQuery = d.query || "";
+      searchResults = d.items || [];
+      renderBody(lastData);
+    }
   });
 
   function render(d) {
-    var out = "";
-    // status row
+    // status row (in place — never re-created, keeps hover state stable)
     var state = d.state || "idle";
     var running = state === "running";
-    var statusLabel = running ? "DSH 运行中" : state === "error" ? "DSH 错误" : state === "stopped" ? "DSH 已停止" : state === "starting" || state === "locating" || state === "installing" ? "DSH 启动中…" : "DSH 空闲";
-    out += '<div class="row status-row" data-click="status" title="' + (running ? "DSH 状态" : "启动服务") + '">'
-      + icon(running ? "zap" : "zap", running ? "green" : "")
-      + '<span class="label">' + esc(statusLabel) + '</span>'
-      + (d.project ? '<span class="desc">' + esc(d.project.split(/[\\\\/]/).pop() || d.project) + "</span>" : "")
-      + "</div>";
-    // top toolbar: 新建会话 / 设置 — one row, always visible
-    out += '<div class="toolbar">'
-      + '<button class="toolbtn" data-click="new-session" title="新建会话">' + icon("plus", "green") + "新建会话</button>"
-      + '<button class="toolbtn" data-click="settings" title="设置">' + icon("gear", "") + "设置</button>"
-      + "</div>";
-    // workspaces
-    out += '<div class="section">工作区</div>';
+    statusLabel.textContent = running ? "DSH 运行中" : state === "error" ? "DSH 错误" : state === "stopped" ? "DSH 已停止" : state === "starting" || state === "locating" || state === "installing" ? "DSH 启动中…" : "DSH 空闲";
+    statusIcon.className = "codicon codicon-zap icon" + (running ? " green" : "");
+    statusRow.title = running ? "DSH 状态" : "启动服务";
+    statusProject.textContent = d.project ? (d.project.split(/[\\\\/]/).pop() || d.project) : "";
+    renderBody(d);
+  }
+
+  function sessionRowHtml(sess, ttl) {
+    return '<div class="row session-row" data-click="session" data-session="' + esc(sess.sessionId) + '" title="' + esc(ttl) + '">'
+      + (sess.running ? icon("chatRunning", "green") : icon("chat", ""))
+      + '<span class="label">' + esc(ttl) + "</span>"
+      + '<span class="desc">' + rel(sess.updatedAt) + "</span>"
+      + '<span class="actions">'
+      + '<button class="iconbtn" data-action="rename" data-session="' + esc(sess.sessionId) + '" data-title="' + esc(ttl) + '" title="重命名">' + icon("edit") + "</button>"
+      + '<button class="iconbtn" data-action="fork" data-session="' + esc(sess.sessionId) + '" title="分叉会话">' + icon("fork") + "</button>"
+      + '<button class="iconbtn" data-action="archive" data-session="' + esc(sess.sessionId) + '" title="归档会话">' + icon("trash") + "</button>"
+      + "</span></div>";
+  }
+
+  function renderBody(d) {
+    if (!d) return;
+    if (searchQuery !== "") {
+      // search results view (local/harness search)
+      var out = '<div class="section">搜索结果</div>';
+      if (searchResults.length === 0) {
+        out += '<div class="empty">无匹配会话</div>';
+      } else {
+        for (var i = 0; i < searchResults.length; i++) {
+          var it = searchResults[i];
+          out += '<div class="row session-row" data-click="session" data-session="' + esc(it.sessionId) + '" title="' + esc(it.title) + '">'
+            + (it.running ? icon("chatRunning", "green") : icon("chat", ""))
+            + '<span class="label">' + esc(it.title) + "</span>"
+            + (it.cwd ? '<span class="desc">' + esc((it.cwd.split(/[\\\\/]/).pop() || it.cwd)) + "</span>" : "")
+            + "</div>";
+        }
+      }
+      bodyEl.innerHTML = out;
+      return;
+    }
+    // workspaces view
+    var out2 = '<div class="section">工作区</div>';
     var archived = {};
-    for (var i = 0; i < (d.archivedSessionIds || []).length; i++) archived[d.archivedSessionIds[i]] = true;
+    for (var i2 = 0; i2 < (d.archivedSessionIds || []).length; i2++) archived[d.archivedSessionIds[i2]] = true;
     var wsItems = d.workspaces || [];
     if (wsItems.length === 0) {
-      out += '<div class="empty">暂无工作区</div>';
+      out2 += '<div class="empty">暂无工作区</div>';
     }
     for (var w = 0; w < wsItems.length; w++) {
       var ws = wsItems[w];
       // Only REAL sessions are listed: archived ones are hidden (like the GUI)
       // and BLANK ones (created but never used — no content yet) are hidden
-      // too, exactly like the dsh sidebar's visibility rule.
+      // too. Workspaces with no visible sessions show nothing under them.
       var visible = (ws.sessionIds || []).filter(function (id) {
         if (archived[id]) return false;
         if (!d.sessions) return false;
@@ -272,8 +371,9 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
         return false;
       });
       var isOpen = expanded[ws.workspaceId] !== false; // default expanded
-      out += '<div class="workspace' + (isOpen ? " open" : "") + '" data-ws="' + esc(ws.workspaceId) + '">';
-      out += '<div class="row ws-row" data-click="workspace" data-ws="' + esc(ws.workspaceId) + '" title="' + esc(ws.path) + '">'
+      out2 += '<div class="workspace' + (isOpen ? " open" : "") + '" data-ws="' + esc(ws.workspaceId) + '">';
+      out2 += '<div class="row ws-row' + (isOpen ? "" : " collapsed") + '" data-click="workspace" data-ws="' + esc(ws.workspaceId) + '" title="' + esc(ws.path) + '">'
+        + chevronIcon()
         + icon("folder", "blue")
         + '<span class="label">' + esc(ws.title || (ws.path || "").split(/[\\\\/]/).pop()) + '</span>'
         + (visible.length > 0 ? '<span class="desc">' + visible.length + " 个会话</span>" : "")
@@ -285,29 +385,18 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
         + '<div class="mi danger" data-action="delete-workspace">删除工作区</div>'
         + "</span>"
         + "</span></div>";
-      out += '<div class="sessions">';
-      if (visible.length === 0) {
-        out += '<div class="empty">暂无会话</div>';
-      }
+      out2 += '<div class="sessions">';
       for (var s = 0; s < visible.length; s++) {
         var sid = visible[s];
         var sess = null;
-        for (var k = 0; k < d.sessions.length; k++) if (d.sessions[k].sessionId === sid) { sess = d.sessions[k]; break; }
+        for (var k2 = 0; k2 < d.sessions.length; k2++) if (d.sessions[k2].sessionId === sid) { sess = d.sessions[k2]; break; }
         if (!sess) continue;
-        var ttl = sess.title || (sess.blank ? "新会话" : sess.sessionId.slice(0, 8));
-        out += '<div class="row session-row" data-click="session" data-session="' + esc(sess.sessionId) + '" title="' + esc(ttl) + '">'
-          + (sess.blank ? icon("plus", "yellow") : sess.running ? icon("chatRunning", "green") : icon("chat", ""))
-          + '<span class="label">' + esc(ttl) + "</span>"
-          + '<span class="desc">' + rel(sess.updatedAt) + "</span>"
-          + '<span class="actions">'
-          + '<button class="iconbtn" data-action="rename" data-session="' + esc(sess.sessionId) + '" data-title="' + esc(ttl) + '" title="重命名">' + icon("edit") + "</button>"
-          + '<button class="iconbtn" data-action="fork" data-session="' + esc(sess.sessionId) + '" title="分叉会话">' + icon("fork") + "</button>"
-          + '<button class="iconbtn" data-action="archive" data-session="' + esc(sess.sessionId) + '" title="归档会话">' + icon("trash") + "</button>"
-          + "</span></div>";
+        var ttl = sess.title || sess.sessionId.slice(0, 8);
+        out2 += sessionRowHtml(sess, ttl);
       }
-      out += "</div></div>";
+      out2 += "</div></div>";
     }
-    root.innerHTML = out;
+    bodyEl.innerHTML = out2;
   }
 })();
 </script>
@@ -356,15 +445,26 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
     view.webview.options = { enableScripts: true };
     const fontUri = view.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "codicon.ttf")).toString();
     view.webview.html = buildLauncherHtml(fontUri, view.webview.cspSource);
-    view.webview.onDidReceiveMessage((message: LauncherEvent) => {
+    view.webview.onDidReceiveMessage((message: LauncherEvent & { type?: string; query?: string }) => {
       if (message === null || typeof message !== "object") return;
-      this.onEvent(message);
+      // Search is pure data — handled here (no extension flow needed).
+      if (message.type === "search") {
+        void this.search(String(message.query ?? ""));
+        return;
+      }
+      this.onEvent(message as LauncherEvent);
     });
     if (!this.revealed) {
       this.revealed = true;
       this.onEvent({ type: "reveal" });
     }
     void this.refresh();
+  }
+
+  /** Run the harness session search and push the results back to the webview. */
+  private async search(query: string): Promise<void> {
+    const items = query === "" ? [] : (await this.manager.searchSessions(query)) ?? [];
+    void this.view?.webview.postMessage({ type: "search-results", query, items });
   }
 
   /** Called by the extension on every DshRuntimeInfo change. */

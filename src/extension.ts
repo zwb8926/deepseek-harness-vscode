@@ -345,17 +345,24 @@ export function activate(context: vscode.ExtensionContext): void {
     panel.setPanelTitle(sessionId, title);
   }
 
-  /** 分叉会话: session.fork, then open the child in its own tab. */
+  /** 分叉会话: session.fork, name the child, open its tab and confirm —
+   *  the fork itself is silent, so the user gets visible feedback. */
   async function forkSessionFlow(sessionId: string): Promise<void> {
     if (!manager.running) await ensureStarted();
+    const sourceTitle = (await sessionTitle(sessionId)) ?? "会话";
     const childId = await manager.forkSession(sessionId);
     if (childId === undefined) {
       void vscode.window.showInformationMessage("无法分叉该会话（需要它有已完成对话）");
       return;
     }
-    await launcherView.refresh();
+    // The server does not title fork children — mirror the GUI behavior and
+    // rename it (so the launcher row and the tab show a readable name).
+    const childTitle = `${sourceTitle} (分叉)`;
+    await manager.renameSession(childId, childTitle);
     lastSessionId = childId;
-    await panel.openSession(childId, (await sessionTitle(childId)) ?? "分叉会话");
+    await launcherView.refresh();
+    panel.openSession(childId, childTitle);
+    void vscode.window.showInformationMessage(`已分叉会话：${childTitle}`);
   }
 
   /** 归档会话: workspace.archiveSession, then refresh (row disappears). */
@@ -401,11 +408,13 @@ export function activate(context: vscode.ExtensionContext): void {
   async function handleLauncherEvent(event: LauncherEvent): Promise<void> {
     switch (event.type) {
       case "reveal": {
+        // Clicking the activity-bar DSH icon only reveals the launcher
+        // sidebar — it must NOT open an editor conversation. Sessions open
+        // only when the user clicks one in the sidebar (or uses a command).
         if (!getCfg("autoStart", true)) break;
         if (launcherFirstReveal) {
           launcherFirstReveal = false;
           await ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
-          void openChatInEditor();
         } else if (!manager.running) {
           await ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
         }
