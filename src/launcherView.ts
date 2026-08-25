@@ -391,7 +391,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
         var sess = null;
         for (var k2 = 0; k2 < d.sessions.length; k2++) if (d.sessions[k2].sessionId === sid) { sess = d.sessions[k2]; break; }
         if (!sess) continue;
-        var ttl = sess.title || sess.sessionId.slice(0, 8);
+        var ttl = sess.title != null && sess.title !== "" ? sess.title : sess.blank ? "新会话" : "未命名会话";
         out2 += sessionRowHtml(sess, ttl);
       }
       out2 += "</div></div>";
@@ -496,7 +496,7 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
         ...this.data,
         sessions: (sessions ?? this.data.sessions).map((s) => ({
           sessionId: s.sessionId,
-          title: s.title !== undefined && s.title !== "" ? s.title : s.blank ? "新会话" : s.sessionId.slice(0, 8),
+          title: s.title != null && s.title !== "" ? s.title : s.blank ? "新会话" : "未命名会话",
           updatedAt: s.updatedAt,
           running: s.running ?? false,
           blank: s.blank ?? true,
