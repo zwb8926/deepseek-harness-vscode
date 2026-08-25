@@ -568,6 +568,47 @@ export class DshManager {
     }));
   }
 
+  /** Search sessions (launcher search box). Tries the harness content search;
+   * when the deployment disables the session-query index (openAt "never"), it
+   * falls back to local title/cwd substring matching over session.list. */
+  async searchSessions(query: string): Promise<Array<{ sessionId: string; title: string; cwd?: string; running?: boolean }> | undefined> {
+    const q = query.trim();
+    if (q === "") return [];
+    const lower = q.toLowerCase();
+    try {
+      const remote = (await this.rpc("session.search", { query: q })) as
+        | { items?: Array<{ sessionId?: string; title?: string; workspace?: string; running?: boolean }> }
+        | undefined;
+      if (remote !== undefined && Array.isArray(remote.items)) {
+        return remote.items
+          .filter((it): it is { sessionId: string; title?: string; running?: boolean } => typeof it.sessionId === "string")
+          .slice(0, 30)
+          .map((it) => ({
+            sessionId: it.sessionId,
+            title: it.title ?? it.sessionId.slice(0, 8),
+            running: it.running
+          }));
+      }
+    } catch {
+      /* fall through to local matching */
+    }
+    const sessions = await this.listSessions();
+    return (sessions ?? [])
+      .filter(
+        (s) =>
+          !s.blank &&
+          ((s.title ?? "").toLowerCase().includes(lower) || (s.cwd ?? "").toLowerCase().includes(lower))
+      )
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 30)
+      .map((s) => ({
+        sessionId: s.sessionId,
+        title: s.title !== undefined && s.title !== "" ? s.title : s.sessionId.slice(0, 8),
+        cwd: s.cwd,
+        running: s.running
+      }));
+  }
+
   /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */
   async applyTheme(preference: "light" | "dark" | "system"): Promise<boolean> {
     const value = await this.rpc("settings.update", { ns: "ui-theme", patch: { preference } });

@@ -45,6 +45,48 @@ const PANEL_MARKER = "dsh-vscode-panel";
 const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
 <script>
 (function () {
+  // Clipboard shim (before the app bundle): inside a VS Code webview the
+  // nested iframe's permissions-policy chain denies navigator.clipboard
+  // writes ("Write permission denied"), and the dsh app's copy helper treats
+  // a rejected writeText as a silent failure (its execCommand fallback only
+  // runs when the clipboard API is ABSENT). Shim writeText so a denied
+  // native write falls back to the classic textarea + execCommand('copy')
+  // path, which is not policy-gated and works under a user click.
+  try {
+    var __dshClip = navigator.clipboard;
+    if (__dshClip && typeof __dshClip.writeText === 'function') {
+      var __dshNativeWrite = __dshClip.writeText.bind(__dshClip);
+      __dshClip.writeText = function (text) {
+        var textStr = String(text);
+        var fallback = function () {
+          try {
+            var ta = document.createElement('textarea');
+            ta.value = textStr;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            var ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok === true;
+          } catch (e2) { return false; }
+        };
+        return new Promise(function (resolve) {
+          var settled = false;
+          try {
+            __dshNativeWrite(textStr).then(function () {
+              if (!settled) { settled = true; resolve(true); }
+            }, function () {
+              if (!settled) { settled = true; resolve(fallback()); }
+            });
+          } catch (e3) {
+            if (!settled) { settled = true; resolve(fallback()); }
+          }
+        });
+      };
+    }
+  } catch (e4) { /* clipboard unavailable — leave as-is */ }
   var panel = new URLSearchParams(location.search).get('dshPanel');
   // Always-on stacking-context fixes: dsh web's Modal container, the
   // settings overlay (VOzbGW_overlay), and the [role="dialog"] inside
