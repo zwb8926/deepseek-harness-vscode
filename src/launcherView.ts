@@ -210,7 +210,7 @@ export function buildLauncherHtml(): string {
     var state = d.state || "idle";
     var running = state === "running";
     var statusLabel = running ? "DSH 运行中" : state === "error" ? "DSH 错误" : state === "stopped" ? "DSH 已停止" : state === "starting" || state === "locating" || state === "installing" ? "DSH 启动中…" : "DSH 空闲";
-    out += '<div class="row status-row" data-click="status" title="' + (running ? "打开会话" : "启动服务") + '">'
+    out += '<div class="row status-row" data-click="status" title="' + (running ? "DSH 状态" : "启动服务") + '">'
       + icon(running ? "zap" : "zap", running ? "green" : "")
       + '<span class="label">' + esc(statusLabel) + '</span>'
       + (d.project ? '<span class="desc">' + esc(d.project.split(/[\\\\/]/).pop() || d.project) + "</span>" : "")

@@ -411,8 +411,10 @@ export function activate(context: vscode.ExtensionContext): void {
       case "click":
         switch (event.kind) {
           case "status":
-            if (manager.running) await openChatInEditor();
-            else await ensureStarted();
+            // The status row is just a status indicator: clicking it must NOT
+            // open a conversation. When the server is stopped it still starts
+            // it (recovery affordance), nothing more.
+            if (!manager.running) await ensureStarted();
             break;
           case "new-session":
             await newSessionIn(workspaceCwd());
