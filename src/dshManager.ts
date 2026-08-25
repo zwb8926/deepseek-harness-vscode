@@ -585,7 +585,7 @@ export class DshManager {
           .slice(0, 30)
           .map((it) => ({
             sessionId: it.sessionId,
-            title: it.title ?? it.sessionId.slice(0, 8),
+            title: it.title != null && it.title !== "" ? it.title : "未命名会话",
             running: it.running
           }));
       }
@@ -603,7 +603,7 @@ export class DshManager {
       .slice(0, 30)
       .map((s) => ({
         sessionId: s.sessionId,
-        title: s.title !== undefined && s.title !== "" ? s.title : s.sessionId.slice(0, 8),
+        title: s.title != null && s.title !== "" ? s.title : "未命名会话",
         cwd: s.cwd,
         running: s.running
       }));
