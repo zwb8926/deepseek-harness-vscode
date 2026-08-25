@@ -408,11 +408,13 @@ export function activate(context: vscode.ExtensionContext): void {
   async function handleLauncherEvent(event: LauncherEvent): Promise<void> {
     switch (event.type) {
       case "reveal": {
+        // Clicking the activity-bar DSH icon only reveals the launcher
+        // sidebar — it must NOT open an editor conversation. Sessions open
+        // only when the user clicks one in the sidebar (or uses a command).
         if (!getCfg("autoStart", true)) break;
         if (launcherFirstReveal) {
           launcherFirstReveal = false;
           await ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
-          void openChatInEditor();
         } else if (!manager.running) {
           await ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
         }
