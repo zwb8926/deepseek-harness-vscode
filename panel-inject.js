@@ -173,23 +173,25 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     // Pinned session: when the URL carries ?session=<id> (each editor tab
     // built by the native launcher tree pins one conversation), this frame
     // ALWAYS shows that conversation. It writes dsh.sessions.current on
-    // load (once) and then ignores storage changes / host session-selected
+    // load and then ignores storage changes / host session-selected
     // messages — otherwise every open tab would fight over the shared
     // localStorage and reload each other. With &seed=1 the selection is
     // written once too, but the frame KEEPS following the global selection
     // (used by the default/settings tab: it shows the last real session
     // instead of a stale blank new-session view). &openSettings=1 opens
     // the settings modal at boot (self-contained, no host message timing).
+    //
+    // This script runs in the head BEFORE the app bundle, so writing the
+    // selection here is already in effect when the app boots — there is NO
+    // reload needed (a reload would restart the whole cold boot and could
+    // push the settings retry past its window).
     var qs = new URLSearchParams(location.search);
     var pinned = qs.get('session') || '';
     var isPinned = pinned !== '' && qs.get('seed') !== '1';
     var seen = readCurrent();
-    if (pinned !== '') {
-      if (seen !== pinned) {
-        writeCurrent(pinned);
-        location.reload();
-        return;
-      }
+    if (pinned !== '' && seen !== pinned) {
+      writeCurrent(pinned);
+      seen = pinned;
     }
     window.addEventListener('storage', function (e) {
       if (e.key !== currentKey) return;
@@ -219,9 +221,11 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     // Settings requested from the launcher: click the (hidden) settings
     // trigger so the modal opens here, in the wide editor tab. Idempotent:
     // if a settings dialog is already open, do nothing — the URL-param boot
-    // and the fallback host message can both request it.
+    // and the fallback host message can both request it. The retry budget is
+    // generous (30s) because a COLD webview panel boots the whole app
+    // (bundle + plugins) and React renders the trigger late.
     var openSettings = function () {
-      var tries = 30;
+      var tries = 100;
       var attempt = function () {
         if (document.querySelector('[role="dialog"]')) return; // already open
         var t = document.querySelector(settingsTrigger);
