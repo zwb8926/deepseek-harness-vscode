@@ -77,6 +77,18 @@
         "title": "DeepSeek Harness: Show Logs",
         "category": "DSH",
         "icon": "$(output)"
+      },
+      {
+        "command": "dsh.newSession",
+        "title": "DeepSeek Harness: New Session",
+        "category": "DSH",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "dsh.openSettings",
+        "title": "DeepSeek Harness: Open Settings",
+        "category": "DSH",
+        "icon": "$(gear)"
       }
     ],
     "viewsContainers": {
@@ -91,9 +103,9 @@
     "views": {
       "dsh": [
         {
-          "type": "webview",
           "id": "dsh.launcher",
-          "name": "Launcher",
+          "name": "DeepSeek Harness",
+          "type": "webview",
           "contextualTitle": "DeepSeek Harness"
         }
       ]

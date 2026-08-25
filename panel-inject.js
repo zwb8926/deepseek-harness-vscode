@@ -141,19 +141,93 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   document.head.appendChild(panelStyle);
   var settingsKey = 'dsh.vscode.panel.settings';
   var settingsTrigger = '[class$="_settingsArea"] button[aria-haspopup="dialog"]';
+  // The GUI persists its session selection under this key as a JSON snapshot
+  // ({"sessionId":"...","subagentAddress":...}) written by its snapshot-store
+  // middleware. A RAW session id breaks rehydration (JSON.parse throws), so
+  // every read/write here goes through JSON — this was the "every click opens
+  // a new session" bug: the app could not restore the pinned conversation.
+  var currentKey = 'dsh.sessions.current';
+  var idOf = function (raw) {
+    if (raw === null) return null;
+    try {
+      var parsed = JSON.parse(raw);
+      return parsed !== null && typeof parsed === 'object' && typeof parsed.sessionId === 'string' ? parsed.sessionId : null;
+    } catch (e) { return null; }
+  };
+  var readCurrent = function () {
+    try { return idOf(localStorage.getItem(currentKey)); } catch (e2) { return null; }
+  };
+  var writeCurrent = function (sessionId) {
+    try { localStorage.setItem(currentKey, JSON.stringify({ sessionId: sessionId })); } catch (e3) {}
+  };
+  // Self-heal: older versions of this adapter wrote a RAW session id under
+  // currentKey, which the GUI's snapshot-store cannot JSON.parse (it throws
+  // and falls back to no session — the "every click opens a new session"
+  // symptom). If the stored value is present but not a valid snapshot, drop
+  // it so the GUI boots clean and the next write is a proper snapshot.
+  try {
+    var rawNow = localStorage.getItem(currentKey);
+    if (rawNow !== null && idOf(rawNow) === null) localStorage.removeItem(currentKey);
+  } catch (e4) {}
   if (panel === 'center') {
-    var seen = null;
-    try { seen = localStorage.getItem('dsh.sessions.current'); } catch (e) {}
+    // Pinned session: when the URL carries ?session=<id> (each editor tab
+    // built by the native launcher tree pins one conversation), this frame
+    // ALWAYS shows that conversation. It writes dsh.sessions.current on
+    // load and then ignores storage changes / host session-selected
+    // messages — otherwise every open tab would fight over the shared
+    // localStorage and reload each other. With &seed=1 the selection is
+    // written once too, but the frame KEEPS following the global selection
+    // (used by the default/settings tab: it shows the last real session
+    // instead of a stale blank new-session view). &openSettings=1 opens
+    // the settings modal at boot (self-contained, no host message timing).
+    //
+    // This script runs in the head BEFORE the app bundle, so writing the
+    // selection here is already in effect when the app boots — there is NO
+    // reload needed (a reload would restart the whole cold boot and could
+    // push the settings retry past its window).
+    var qs = new URLSearchParams(location.search);
+    var pinned = qs.get('session') || '';
+    var isPinned = pinned !== '' && qs.get('seed') !== '1';
+    var seen = readCurrent();
+    if (pinned !== '' && seen !== pinned) {
+      writeCurrent(pinned);
+      seen = pinned;
+    }
     window.addEventListener('storage', function (e) {
-      if (e.key !== 'dsh.sessions.current' || e.newValue === seen) return;
-      seen = e.newValue;
+      if (e.key !== currentKey) return;
+      var next = idOf(e.newValue);
+      if (next === seen) return;
+      if (isPinned) return; // pinned tabs ignore global selection changes
+      seen = next;
       location.reload();
     });
+    // Native-launcher bridge: the VS Code extension (which owns the new
+    // TreeView sidebar now) posts { source: 'dsh-vscode-host', type:
+    // 'session-selected', sessionId } to the editor iframe when the user
+    // clicks a session in the native tree. Mirrors the sidebar's own
+    // storage write so the editor shows the selected conversation.
+    // 'open-settings' opens the settings modal in the editor tab.
+    window.addEventListener('message', function (e) {
+      var d = e.data;
+      if (d === null || typeof d !== 'object' || d.source !== 'dsh-vscode-host') return;
+      if (d.type === 'session-selected' && typeof d.sessionId === 'string' && d.sessionId !== '' && !isPinned) {
+        writeCurrent(d.sessionId);
+        seen = d.sessionId;
+        location.reload();
+      } else if (d.type === 'open-settings') {
+        openSettings();
+      }
+    });
     // Settings requested from the launcher: click the (hidden) settings
-    // trigger so the modal opens here, in the wide editor tab.
+    // trigger so the modal opens here, in the wide editor tab. Idempotent:
+    // if a settings dialog is already open, do nothing — the URL-param boot
+    // and the fallback host message can both request it. The retry budget is
+    // generous (30s) because a COLD webview panel boots the whole app
+    // (bundle + plugins) and React renders the trigger late.
     var openSettings = function () {
-      var tries = 30;
+      var tries = 100;
       var attempt = function () {
+        if (document.querySelector('[role="dialog"]')) return; // already open
         var t = document.querySelector(settingsTrigger);
         if (t) {
           try { localStorage.removeItem(settingsKey); } catch (e2) {}
@@ -168,19 +242,21 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       if (e.key === settingsKey) openSettings();
     });
     try { if (localStorage.getItem(settingsKey) !== null) openSettings(); } catch (e) {}
+    // &openSettings=1: the settings tab asks for the settings modal directly
+    // at boot — the extension no longer depends on the host-message bridge
+    // (iframe-ready timing) for this.
+    if (qs.get('openSettings') === '1') openSettings();
   } else {
     // Sidebar: report session picks and settings requests to the VS Code
     // webview. The writing tab does not receive its own storage event, so
     // the session selection is polled; the settings click is intercepted at
     // capture time so the launcher's own narrow modal never opens.
-    var last = null;
-    try { last = localStorage.getItem('dsh.sessions.current'); } catch (e) {}
+    var last = readCurrent();
     var postSessionSelected = function () {
       try { parent.postMessage({ source: 'dsh-vscode-panel', type: 'session-selected' }, '*'); } catch (e) {}
     };
     setInterval(function () {
-      var now = null;
-      try { now = localStorage.getItem('dsh.sessions.current'); } catch (e) {}
+      var now = readCurrent();
       if (now !== last) {
         last = now;
         postSessionSelected();
@@ -224,7 +300,8 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
           // tab opens; the duplicate is harmless.
           var sid = row.getAttribute('data-session-id') || row.getAttribute('data-id') || null;
           if (sid !== null) {
-            try { localStorage.setItem('dsh.sessions.current', sid); last = sid; } catch (e3) {}
+            writeCurrent(sid);
+            last = sid;
           }
           postSessionSelected();
         }

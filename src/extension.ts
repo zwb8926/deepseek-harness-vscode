@@ -10,8 +10,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { ChatPanel, PanelAction } from "./chatPanel";
-import { LauncherViewProvider } from "./chatView";
 import { DshManager, DshRuntimeInfo } from "./dshManager";
+import { LauncherEvent, LauncherViewProvider } from "./launcherView";
 
 function getCfg<T>(key: string, fallback: T): T {
   return vscode.workspace.getConfiguration("dsh").get<T>(key, fallback);
@@ -42,7 +42,7 @@ export function activate(context: vscode.ExtensionContext): void {
     onInfo: (info) => {
       renderStatus(info);
       panel.update(info);
-      launcher.update(info);
+      launcherView.updateState(info.state, info.url);
       if (info.state === "running" && info.url !== undefined) {
         // 把当前 VS Code 项目注册为 dsh workspace（workspace.create 幂等，
         // 不创建会话）——侧栏的 workspace 分组立即可见该项目。
@@ -54,6 +54,8 @@ export function activate(context: vscode.ExtensionContext): void {
         // Push the current VS Code theme into the dsh UI so the embedded
         // webview matches the user's color preference.
         void syncTheme();
+        // Populate the launcher immediately when the server is up.
+        void launcherView.refresh();
       }
     },
     log
@@ -66,57 +68,40 @@ export function activate(context: vscode.ExtensionContext): void {
     context.extensionUri,
     // The editor tab is the only place where a "current session" makes
     // sense — when the user closes the tab there is no conversation
-    // panel left. Ask the launcher to drop its selected highlight so
-    // the sidebar does not show a session as active that has no
-    // editor tab open anywhere.
+    // panel left. (The native tree always shows its own state; nothing
+    // else needs to be told.)
     () => {
-      launcher.postToGui({ type: "session-closed" });
+      /* editor tab closed — tree keeps its own highlight-free state */
     },
     // A new editor tab is opening (or an existing one is being
-    // revealed). Restore the sidebar's normal highlight so the user
-    // can see which row is currently being shown.
+    // revealed). Nothing to push to the native tree.
     () => {
-      launcher.postToGui({ type: "session-opened" });
+      /* editor tab opened */
     }
   );
 
-  // Activity-bar whale icon → sidebar panel with session controls; the chat
-  // itself always opens as a full editor tab.
+  // Activity-bar whale icon → CUSTOM WEBVIEW launcher (hover-revealed row
+  // actions: sessions get 重命名/分叉/归档, workspaces get 新建会话 + 更多
+  // (重命名/删除工作区) — the native TreeView API has no hover buttons, so
+  // the launcher is a WebviewView that replicates the previous layout).
+  const launcherView = new LauncherViewProvider(manager, (event: LauncherEvent) => {
+    void handleLauncherEvent(event);
+  }, context.extensionUri);
+  launcherView.start();
+  const launcherProvider = vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcherView, {
+    webviewOptions: { retainContextWhenHidden: true }
+  });
+  context.subscriptions.push(launcherProvider, launcherView);
+  // First reveal of the launcher (clicking the activity-bar icon): auto-start
+  // the server if configured and open the chat for the first time.
   let launcherFirstReveal = true;
-  const launcher = new LauncherViewProvider(
-    (action: PanelAction) => {
-      void handlePanelAction(action);
-    },
-    // Whenever the launcher becomes visible:
-    //   - on the first reveal of the session, start the server (if not
-    //     already running) AND open the chat editor tab so the user has
-    //     the conversation ready to go;
-    //   - on every subsequent re-probe, just re-attempt adopt-or-start
-    //     so the sidebar never stays stuck on "服务未运行" while a dsh
-    //     server is reachable on port 3080. We do NOT re-open the
-    //     editor tab on every visibility flip — that would pop the
-    //     chat back to the front any time the user clicks the
-    //     activity-bar icon.
-    () => {
-      if (!getCfg("autoStart", true)) return;
-      if (launcherFirstReveal) {
-        launcherFirstReveal = false;
-        void ensureStarted()
-          .catch((err) => log(`launcher-open auto-start failed: ${String(err)}`))
-          .finally(() => { void openChatInEditor(); });
-      } else if (!manager.running) {
-        void ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
-      }
-    }
-  );
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcher, {
-      webviewOptions: { retainContextWhenHidden: true }
-    })
-  );
+
+  // The last real conversation the user opened — used to seed the default
+  // panel so it never falls back to a stale blank "new session" view.
+  let lastSessionId = "";
 
   async function openChatInEditor(): Promise<void> {
-    panel.open();
+    panel.open(lastSessionId === "" ? undefined : lastSessionId);
     if (getCfg("autoStart", true) && !manager.running) {
       await ensureStarted();
     }
@@ -167,6 +152,7 @@ export function activate(context: vscode.ExtensionContext): void {
   function refreshProject(): void {
     const project = workspaceCwd();
     manager.setProject(project);
+    launcherView.setProject(project);
     log(`workspaceCwd: ${project}`);
   }
 
@@ -197,11 +183,29 @@ export function activate(context: vscode.ExtensionContext): void {
     await manager.applyTheme(isDarkTheme() ? "dark" : "light");
   }
 
+  /** Resolve a session's display title for its editor tab (best-effort). */
+  const sessionTitleCache = new Map<string, string>();
+  async function sessionTitle(sessionId: string): Promise<string | undefined> {
+    const cached = sessionTitleCache.get(sessionId);
+    if (cached !== undefined) return cached;
+    try {
+      const sessions = await manager.listSessions();
+      const found = sessions?.find((s) => s.sessionId === sessionId);
+      const title = found?.title ?? (found?.blank ? "新会话" : undefined);
+      if (title !== undefined) sessionTitleCache.set(sessionId, title);
+      return title;
+    } catch {
+      return undefined;
+    }
+  }
+
   async function handlePanelAction(action: PanelAction): Promise<void> {
     switch (action.type) {
       case "open-chat":
-      case "open-settings":
         await openChatInEditor();
+        break;
+      case "open-settings":
+        await openSettingsFlow();
         break;
       case "start":
         await ensureStarted();
@@ -216,7 +220,7 @@ export function activate(context: vscode.ExtensionContext): void {
         break;
       case "reload":
         panel.reload();
-        launcher.reload();
+        void launcherView.refresh();
         break;
       case "open-browser":
         await openInBrowser();
@@ -277,6 +281,187 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
+  // ---------------------------------------------------------- launcher flows
+
+  /** Open (or create) a new conversation in the editor tab. */
+  async function newSessionIn(cwd?: string): Promise<void> {
+    if (!manager.running) await ensureStarted();
+    const sessionId = await manager.createSession(cwd);
+    if (sessionId !== undefined) {
+      lastSessionId = sessionId;
+      panel.openSession(sessionId, "新会话");
+    }
+    void launcherView.refresh();
+  }
+
+  /** Create a session inside an existing workspace and show it in the editor. */
+  async function newSessionInWorkspace(workspaceId: string): Promise<void> {
+    if (!manager.running) await ensureStarted();
+    const sessionId = await manager.createSessionForWorkspace(workspaceId);
+    if (sessionId !== undefined) {
+      lastSessionId = sessionId;
+      panel.openSession(sessionId, "新会话");
+    } else void vscode.window.showErrorMessage("无法在当前工作区创建会话");
+    void launcherView.refresh();
+  }
+
+  /** Open one conversation's own editor tab (pinned via ?session=). */
+  async function openSessionFlow(sessionId: string, title?: string): Promise<void> {
+    if (typeof sessionId !== "string" || sessionId === "") return;
+    if (!manager.running) await ensureStarted();
+    if (title === undefined) title = await sessionTitle(sessionId);
+    lastSessionId = sessionId;
+    panel.openSession(sessionId, title);
+  }
+
+  async function openSettingsFlow(): Promise<void> {
+    if (!manager.running) await ensureStarted();
+    // Single render carrying ?openSettings=1: the settings modal opens in the
+    // page itself at boot — no double-render, no host-message timing. The
+    // default panel is seeded with the last real session so the editor shows
+    // a conversation, not a new-session view.
+    panel.openSettings(lastSessionId === "" ? undefined : lastSessionId);
+    // Fallback: a host message after iframe-ready re-requests the modal if a
+    // later re-render (state change) clobbered the URL-param boot.
+    panel.postToGui({ type: "open-settings" });
+  }
+
+  /** 重命名会话: input box → sessions.rename RPC. */
+  async function renameSessionFlow(sessionId: string, currentTitle?: string): Promise<void> {
+    const value = await vscode.window.showInputBox({
+      prompt: "重命名会话",
+      value: currentTitle ?? "",
+      placeHolder: "输入新的会话名称",
+      ignoreFocusOut: true
+    });
+    if (value === undefined) return;
+    const title = value.trim();
+    if (title === "") return;
+    if (!manager.running) await ensureStarted();
+    const ok = await manager.renameSession(sessionId, title);
+    if (!ok) void vscode.window.showErrorMessage("重命名失败，请查看日志");
+    void launcherView.refresh();
+    // Update the editor tab title if this session's tab is open.
+    panel.setPanelTitle(sessionId, title);
+  }
+
+  /** 分叉会话: session.fork, then open the child in its own tab. */
+  async function forkSessionFlow(sessionId: string): Promise<void> {
+    if (!manager.running) await ensureStarted();
+    const childId = await manager.forkSession(sessionId);
+    if (childId === undefined) {
+      void vscode.window.showInformationMessage("无法分叉该会话（需要它有已完成对话）");
+      return;
+    }
+    await launcherView.refresh();
+    lastSessionId = childId;
+    await panel.openSession(childId, (await sessionTitle(childId)) ?? "分叉会话");
+  }
+
+  /** 归档会话: workspace.archiveSession, then refresh (row disappears). */
+  async function archiveSessionFlow(sessionId: string): Promise<void> {
+    if (!manager.running) await ensureStarted();
+    await manager.archiveSession(sessionId);
+    void launcherView.refresh();
+  }
+
+  /** 重命名工作区: input box → workspace.rename RPC. */
+  async function renameWorkspaceFlow(workspaceId: string, currentTitle?: string): Promise<void> {
+    const value = await vscode.window.showInputBox({
+      prompt: "重命名工作区",
+      value: currentTitle ?? "",
+      placeHolder: "输入新的工作区名称",
+      ignoreFocusOut: true
+    });
+    if (value === undefined) return;
+    const title = value.trim();
+    if (title === "") return;
+    if (!manager.running) await ensureStarted();
+    const ok = await manager.renameWorkspace(workspaceId, title);
+    if (!ok) void vscode.window.showErrorMessage("重命名失败，请查看日志");
+    void launcherView.refresh();
+  }
+
+  /** 删除工作区: modal confirm → workspace.delete RPC. */
+  async function deleteWorkspaceFlow(workspaceId: string, title?: string): Promise<void> {
+    const name = title !== undefined && title !== "" ? title : "该工作区";
+    const pick = await vscode.window.showWarningMessage(
+      `删除工作区“${name}”？文件夹与会话记录会保留，其会话将不再按工作区分组显示。`,
+      { modal: true },
+      "删除"
+    );
+    if (pick !== "删除") return;
+    if (!manager.running) await ensureStarted();
+    const ok = await manager.deleteWorkspace(workspaceId);
+    if (!ok) void vscode.window.showErrorMessage("删除失败，请查看日志");
+    void launcherView.refresh();
+  }
+
+  /** Webview launcher events → extension flows. */
+  async function handleLauncherEvent(event: LauncherEvent): Promise<void> {
+    switch (event.type) {
+      case "reveal": {
+        if (!getCfg("autoStart", true)) break;
+        if (launcherFirstReveal) {
+          launcherFirstReveal = false;
+          await ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
+          void openChatInEditor();
+        } else if (!manager.running) {
+          await ensureStarted().catch((err) => log(`launcher-open auto-start failed: ${String(err)}`));
+        }
+        void launcherView.refresh();
+        break;
+      }
+      case "click":
+        switch (event.kind) {
+          case "status":
+            // The status row is just a status indicator: clicking it must NOT
+            // open a conversation. When the server is stopped it still starts
+            // it (recovery affordance), nothing more.
+            if (!manager.running) await ensureStarted();
+            break;
+          case "new-session":
+            await newSessionIn(workspaceCwd());
+            break;
+          case "settings":
+            await openSettingsFlow();
+            break;
+          case "session":
+            if (event.sessionId !== undefined) await openSessionFlow(event.sessionId);
+            break;
+          case "workspace":
+            if (event.workspaceId !== undefined) {
+              if (!manager.running) await ensureStarted();
+              panel.open(lastSessionId === "" ? undefined : lastSessionId);
+            }
+            break;
+        }
+        break;
+      case "action":
+        switch (event.action) {
+          case "rename":
+            if (event.sessionId !== undefined) await renameSessionFlow(event.sessionId, event.title);
+            break;
+          case "fork":
+            if (event.sessionId !== undefined) await forkSessionFlow(event.sessionId);
+            break;
+          case "archive":
+            if (event.sessionId !== undefined) await archiveSessionFlow(event.sessionId);
+            break;
+          case "new-session":
+            if (event.workspaceId !== undefined) await newSessionInWorkspace(event.workspaceId);
+            break;
+          case "rename-workspace":
+            if (event.workspaceId !== undefined) await renameWorkspaceFlow(event.workspaceId, event.title);
+            break;
+          case "delete-workspace":
+            if (event.workspaceId !== undefined) await deleteWorkspaceFlow(event.workspaceId, event.title);
+            break;
+        }
+        break;
+    }
+  }
+
   // ---------------------------------------------------------------- commands
 
   context.subscriptions.push(
@@ -290,7 +475,21 @@ export function activate(context: vscode.ExtensionContext): void {
       await manager.start();
     }),
     vscode.commands.registerCommand("dsh.reloadPanel", () => panel.reload()),
-    vscode.commands.registerCommand("dsh.showLogs", () => output.show(true))
+    vscode.commands.registerCommand("dsh.showLogs", () => output.show(true)),
+    // Launcher: click a session → open THAT conversation's own editor tab
+    // (pinned via ?session= — one page per session).
+    vscode.commands.registerCommand("dsh.openSession", (sessionId: string) => openSessionFlow(sessionId)),
+    // Click a workspace → show the launcher's default editor tab.
+    vscode.commands.registerCommand("dsh.openWorkspace", async (workspaceId: string) => {
+      if (typeof workspaceId !== "string" || workspaceId === "") return;
+      if (!manager.running) await ensureStarted();
+      panel.open();
+    }),
+    // Launcher "新建会话": creates a session in the current project and opens its tab.
+    vscode.commands.registerCommand("dsh.newSession", () => newSessionIn(workspaceCwd())),
+    // Launcher "设置" row: open the default editor tab and open the dsh
+    // settings modal there (handled by panel-inject open-settings).
+    vscode.commands.registerCommand("dsh.openSettings", () => openSettingsFlow())
   );
 
   context.subscriptions.push(
@@ -303,11 +502,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidChangeActiveColorTheme(() => {
       void syncTheme();
       panel.reload();
-      launcher.reload();
+      void launcherView.refresh();
     }),
     // Keep the launcher's project line in sync with the active editor.
     vscode.window.onDidChangeActiveTextEditor(() => {
       refreshProject();
+      void launcherView.refresh();
     })
   );
 

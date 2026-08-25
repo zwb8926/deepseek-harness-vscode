@@ -412,6 +412,72 @@ export class DshManager {
     return value?.sessionId;
   }
 
+  /** Create a session directly inside an existing workspace record. */
+  async createSessionForWorkspace(workspaceId: string): Promise<string | undefined> {
+    const value = (await this.rpc("session.create", { workspaceId })) as { sessionId?: string } | undefined;
+    if (value?.sessionId === undefined) {
+      this.opts.log(`createSessionForWorkspace: could not create session in ${workspaceId}`);
+    }
+    return value?.sessionId;
+  }
+
+  /** Rename a session (sets its durable title). Returns whether the RPC succeeded. */
+  async renameSession(sessionId: string, title: string): Promise<boolean> {
+    const value = (await this.rpc("session.rename", { sessionId, title })) as { title?: string } | undefined;
+    if (value === undefined) {
+      this.opts.log(`renameSession: could not rename ${sessionId}`);
+      return false;
+    }
+    this.opts.log(`renameSession: ${sessionId} -> ${title}`);
+    return true;
+  }
+
+  /** Fork a session at its current tail (the child carries the history).
+   * Returns the child sessionId, or undefined on failure (e.g. blank session). */
+  async forkSession(sessionId: string): Promise<string | undefined> {
+    const value = (await this.rpc("session.fork", { sessionId })) as { sessionId?: string } | undefined;
+    if (value?.sessionId === undefined) {
+      this.opts.log(`forkSession: could not fork ${sessionId}`);
+    }
+    return value?.sessionId;
+  }
+
+  /** Archive a session into the registry-global archive set (hidden from the
+   * launcher/workspace lists, exactly like the dsh GUI sidebar). */
+  async archiveSession(sessionId: string): Promise<boolean> {
+    const value = (await this.rpc("workspace.archiveSession", { sessionId })) as
+      | { archivedSessionIds?: string[] }
+      | undefined;
+    if (value === undefined) {
+      this.opts.log(`archiveSession: could not archive ${sessionId}`);
+      return false;
+    }
+    this.opts.log(`archiveSession: ${sessionId} archived (${value.archivedSessionIds?.length ?? 0} total)`);
+    return true;
+  }
+
+  /** Rename a workspace record (display title). */
+  async renameWorkspace(workspaceId: string, title: string): Promise<boolean> {
+    const value = (await this.rpc("workspace.rename", { workspaceId, title })) as { workspace?: unknown } | undefined;
+    if (value === undefined) {
+      this.opts.log(`renameWorkspace: could not rename ${workspaceId}`);
+      return false;
+    }
+    this.opts.log(`renameWorkspace: ${workspaceId} -> ${title}`);
+    return true;
+  }
+
+  /** Delete a workspace registration (sessions/records are kept; they become ungrouped). */
+  async deleteWorkspace(workspaceId: string): Promise<boolean> {
+    const value = (await this.rpc("workspace.delete", { workspaceId })) as { deleted?: boolean } | undefined;
+    if (value?.deleted !== true) {
+      this.opts.log(`deleteWorkspace: could not delete ${workspaceId}`);
+      return false;
+    }
+    this.opts.log(`deleteWorkspace: ${workspaceId} deleted`);
+    return true;
+  }
+
   /** Ensure a real workspace record exists for `path` (idempotent); returns its workspaceId. */
   async ensureWorkspace(path: string): Promise<string | undefined> {
     const value = (await this.rpc("workspace.create", { path })) as
@@ -439,16 +505,67 @@ export class DshManager {
     return this.createSession(path);
   }
 
-  /** List the real workspace records (verification/diagnostics). */
-  async listWorkspaces(): Promise<Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }> | undefined> {
-    const value = (await this.rpc("workspace.list", {})) as { items?: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }> } | undefined;
-    return value?.items;
+  /** List the real workspace records (verification/diagnostics).
+   * Also returns the registry-global archive set (the same `archivedSessionIds`
+   * the GUI sidebar uses to hide archived sessions: a session bound to a
+   * workspace is only visible when it is not in this set). */
+  async listWorkspaces(): Promise<
+    | {
+        items: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
+        archivedSessionIds: string[];
+      }
+    | undefined
+  > {
+    const value = (await this.rpc("workspace.list", {})) as
+      | {
+          items?: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
+          archivedSessionIds?: string[];
+        }
+      | undefined;
+    if (value === undefined) return undefined;
+    return {
+      items: value.items ?? [],
+      archivedSessionIds: value.archivedSessionIds ?? []
+    };
   }
 
-  /** List all sessions with their cwd and updatedAt (to find a project's session). */
-  async listSessions(): Promise<Array<{ sessionId: string; updatedAt: number; cwd?: string; running?: boolean; blank?: boolean }> | undefined> {
-    const value = (await this.rpc("session.list", {})) as { items?: Array<{ sessionId: string; updatedAt: number; cwd?: string; running?: boolean; blank?: boolean }> } | undefined;
-    return value?.items;
+  /** List all sessions with their cwd and updatedAt (to find a project's session).
+   * Also surfaces the dsh title/stats projection best-effort so the native
+   * launcher tree can show human-readable titles without a second round trip. */
+  async listSessions(): Promise<
+    Array<{
+      sessionId: string;
+      updatedAt: number;
+      cwd?: string;
+      running?: boolean;
+      blank?: boolean;
+      title?: string;
+      turns?: number;
+      steps?: number;
+    }> | undefined
+  > {
+    const value = (await this.rpc("session.list", {})) as
+      | {
+          items?: Array<{
+            sessionId: string;
+            updatedAt: number;
+            cwd?: string;
+            running?: boolean;
+            blank?: boolean;
+            projections?: { values?: { title?: string; sessionStats?: { turns?: number; steps?: number } } };
+          }>;
+        }
+      | undefined;
+    return value?.items?.map((it) => ({
+      sessionId: it.sessionId,
+      updatedAt: it.updatedAt,
+      cwd: it.cwd,
+      running: it.running,
+      blank: it.blank,
+      title: it.projections?.values?.title,
+      turns: it.projections?.values?.sessionStats?.turns,
+      steps: it.projections?.values?.sessionStats?.steps
+    }));
   }
 
   /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */

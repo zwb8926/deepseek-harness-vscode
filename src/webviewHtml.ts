@@ -144,6 +144,9 @@ export function shellHtml(body: string, dark: boolean): string {
       "'box-shadow: none !important;}';" +
     "document.head.appendChild(s);";
   document.head.appendChild(initial);
+  const ready = document.createElement("script");
+  ready.textContent = IFRAME_READY_SCRIPT;
+  document.head.appendChild(ready);
 })();
 </script>
 </body>
@@ -177,11 +180,39 @@ function guiIframeHtml(src: string, title: string): string {
   return `<iframe title="${title}" src="${escapeHtml(src)}" ${IFRAME_ATTRS}></iframe>`;
 }
 
-/** Split-panel iframe source for one panel mode, when the frontend supports it. */
-function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean): string {
+/** Injected on every shell page: report when the embedded GUI iframe has
+ * finished loading so the extension knows it can deliver host messages
+ * (the panel-inject script must be running before a session-selected
+ * message lands — clicks from the native launcher tree depend on this). */
+const IFRAME_READY_SCRIPT = `
+document.addEventListener("DOMContentLoaded", function () {
+  var frame = document.querySelector("iframe");
+  if (frame === null) return;
+  frame.addEventListener("load", function () {
+    try { vscode.postMessage({ source: "dsh-vscode-panel", type: "iframe-ready" }); } catch (e) {}
+  });
+});`;
+
+/** Split-panel iframe source for one panel mode, when the frontend supports it.
+ * When `sessionId` is given, the iframe is pinned to that conversation: the
+ * panel-inject script reads `?session=` and forces `dsh.sessions.current`,
+ * so each editor tab shows its OWN conversation (independent of the shared
+ * localStorage that the GUI sidebar writes). `opts.seedSession` writes the
+ * same selection ONCE but leaves the tab following the GUI (used by the
+ * default/settings tab so it never falls back to a stale new-session view);
+ * `opts.openSettings` makes panel-inject click the settings trigger at boot
+ * (no host-message timing involved). */
+function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean, sessionId?: string, opts?: { seedSession?: string; openSettings?: boolean }): string {
   if (!supported) return url;
   const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}dshPanel=${panel}`;
+  let src = `${url}${sep}dshPanel=${panel}`;
+  const sid = sessionId ?? opts?.seedSession;
+  if (sid !== undefined && sid !== "") {
+    src += `&session=${encodeURIComponent(sid)}`;
+    if (sessionId === undefined) src += "&seed=1";
+  }
+  if (opts?.openSettings === true) src += "&openSettings=1";
+  return src;
 }
 
 /** Sidebar panel: the GUI's own sidebar column (sessions / workspaces). */
@@ -253,14 +284,17 @@ function stateLabelOf(info?: DshRuntimeInfo): string {
   }
 }
 
-/** Build the #stage body for one runtime state. */
-export function stateBody(info?: DshRuntimeInfo): string {
+/** Build the #stage body for one runtime state. When `sessionId` is given,
+ * the embedded GUI is pinned to that conversation (`?session=` param).
+ * `opts.seedSession` seeds the selection once without pinning; `opts.openSettings`
+ * auto-opens the settings modal in the loaded page. */
+export function stateBody(info?: DshRuntimeInfo, sessionId?: string, opts?: { seedSession?: string; openSettings?: boolean }): string {
   switch (info?.state) {
     case "running": {
       const url = info.url ?? "";
       // Editor area = the GUI's center column (conversation + details), no
       // sidebar. Full GUI when the frontend lacks split-panel support.
-      const src = panelSrc(url, "center", info.panelSupport !== false);
+      const src = panelSrc(url, "center", info.panelSupport !== false, sessionId, opts);
       return guiIframeHtml(src, "DeepSeek Harness");
     }
     case "locating":
