@@ -83,6 +83,18 @@ const CODICONS: Record<string, string> = {
 const VIEW_CSS = `
 @font-face { font-family: "codicon"; src: url("__CODICON_FONT_URI__") format("truetype"); }
 .codicon { font-family: "codicon"; font-size: 14px; line-height: 1; speak: none; }
+/* codicon glyphs — the class only selects the font; the glyph itself is the
+   ::before content below (same codes as the official codicon.css) */
+.codicon-zap::before { content: "\\ea86"; }
+.codicon-plus::before { content: "\\ea60"; }
+.codicon-gear::before { content: "\\eaf8"; }
+.codicon-folder::before { content: "\\ea83"; }
+.codicon-comment::before { content: "\\ea6b"; }
+.codicon-comment-discussion::before { content: "\\eac7"; }
+.codicon-edit::before { content: "\\ea73"; }
+.codicon-git-branch::before { content: "\\ea68"; }
+.codicon-trash::before { content: "\\ea81"; }
+.codicon-ellipsis::before { content: "\\ea7c"; }
 :root { color-scheme: light dark; }
 body { margin: 0; padding: 4px 4px 8px; font-family: var(--vscode-font-family, system-ui); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground); background: transparent; }
 .launcher { display: flex; flex-direction: column; gap: 1px; }
