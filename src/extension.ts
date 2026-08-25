@@ -86,7 +86,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // the launcher is a WebviewView that replicates the previous layout).
   const launcherView = new LauncherViewProvider(manager, (event: LauncherEvent) => {
     void handleLauncherEvent(event);
-  });
+  }, context.extensionUri);
   launcherView.start();
   const launcherProvider = vscode.window.registerWebviewViewProvider(LauncherViewProvider.viewType, launcherView, {
     webviewOptions: { retainContextWhenHidden: true }

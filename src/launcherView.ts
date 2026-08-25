@@ -64,20 +64,25 @@ export type LauncherEvent =
   | { type: "action"; action: "rename-workspace" | "delete-workspace"; workspaceId: string; title?: string };
 
 // ------------------------------------------------------------------ icons
+// All glyphs are official VS Code Codicons (media/codicon.ttf + the codicon
+// class list below) — native look, no hand-drawn SVGs.
 
-const ICONS: Record<string, string> = {
-  zap: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M9.5 1.5 4 9h3l-1 5.5L11.5 7h-3l1-5.5z"/></svg>',
-  plus: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="1.4" d="M8 2.5v11M2.5 8h11"/></svg>',
-  gear: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M8 4.2 9 .9l1.7 2.6 3-.4-.3 3 2.3 1.9-2.3 1.9.3 3-3-.4L9 15.1l-1-3.3h-.1l-1 3.3-1.6-2.6-3 .4.3-3L.3 8l2.3-1.9-.3-3 3 .4L7 .9l1 3.3z"/></svg>',
-  folder: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M1.5 3h4l1.5 1.5h7.5v8.5h-13V3z"/></svg>',
-  chat: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M2 2h12v9H6l-3.5 2.5V11H2V2z"/></svg>',
-  edit: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="1.3" d="M11.3 2.2 13.8 4.7 5.5 13H3v-2.5l8.3-8.3z"/></svg>',
-  fork: '<svg viewBox="0 0 16 16" width="14" height="14"><circle cx="4.5" cy="3.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="11.5" cy="3.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="8" cy="12.5" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/><path fill="none" stroke="currentColor" stroke-width="1.2" d="M4.5 5.1v2.2c0 1.6 1.2 2.8 2.8 2.8h1.4M11.5 5.1v2.2c0 1.6-1.2 2.8-2.8 2.8h-1.4"/></svg>',
-  trash: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="1.2" d="M3 4.5h10M5.5 4.5V2.8h5v1.7M4.2 4.5l.6 8.7h6.4l.6-8.7M6.5 7v4M9.5 7v4"/></svg>',
-  more: '<svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M8 2a1.2 1.2 0 1 1 0 2.4A1.2 1.2 0 0 1 8 2zm0 4.8a1.2 1.2 0 1 1 0 2.4A1.2 1.2 0 0 1 8 6.8zm0 4.8a1.2 1.2 0 1 1 0 2.4A1.2 1.2 0 0 1 8 11.6z"/></svg>'
+const CODICONS: Record<string, string> = {
+  zap: "codicon-zap",
+  plus: "codicon-plus",
+  gear: "codicon-gear",
+  folder: "codicon-folder",
+  chat: "codicon-comment",
+  chatRunning: "codicon-comment-discussion",
+  edit: "codicon-edit",
+  fork: "codicon-git-branch",
+  trash: "codicon-trash",
+  more: "codicon-ellipsis"
 };
 
 const VIEW_CSS = `
+@font-face { font-family: "codicon"; src: url("__CODICON_FONT_URI__") format("truetype"); }
+.codicon { font-family: "codicon"; font-size: 14px; line-height: 1; speak: none; }
 :root { color-scheme: light dark; }
 body { margin: 0; padding: 4px 4px 8px; font-family: var(--vscode-font-family, system-ui); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground); background: transparent; }
 .launcher { display: flex; flex-direction: column; gap: 1px; }
@@ -94,6 +99,18 @@ body { margin: 0; padding: 4px 4px 8px; font-family: var(--vscode-font-family, s
 .row .label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .desc { flex: none; font-size: 11px; color: var(--vscode-descriptionForeground); }
 .status-row .label { font-weight: 600; }
+/* top toolbar row: 新建会话 / 设置 — ALWAYS visible, side by side */
+.toolbar { display: flex; gap: 4px; padding: 2px 2px 5px; }
+button.toolbtn {
+  flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 4px 6px; border-radius: 5px; border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  font-size: 12px; cursor: pointer; min-width: 0;
+}
+button.toolbtn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.18)); }
+button.toolbtn .icon { width: 14px; height: 14px; }
+button.toolbtn .codicon { font-size: 14px; }
 .section { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--vscode-descriptionForeground); padding: 6px 6px 2px; }
 /* hover-revealed action buttons (also pinned while its menu is open) */
 .actions { flex: none; display: none; gap: 2px; align-items: center; }
@@ -104,7 +121,7 @@ button.iconbtn {
   border-radius: 4px; cursor: pointer; padding: 0;
 }
 button.iconbtn:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.25)); }
-button.iconbtn svg { pointer-events: none; }
+button.iconbtn .codicon { font-size: 13px; pointer-events: none; }
 .more-menu {
   position: absolute; right: 30px; top: 22px; z-index: 30; min-width: 120px;
   background: var(--vscode-menu-background, #2d2d30); border: 1px solid var(--vscode-menu-border, #454545);
@@ -124,14 +141,16 @@ button.iconbtn svg { pointer-events: none; }
 
 // ------------------------------------------------------------------ HTML
 
-/** Build the full launcher webview HTML (exported for smoke tests). */
-export function buildLauncherHtml(): string {
-  return `<!DOCTYPE html>
+/** Build the full launcher webview HTML (exported for smoke tests).
+ * `fontUri` is the webview-accessible codicon.tft resource; `fontCsp` is the
+ * CSP source to allow it (webview.cspSource). */
+export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
+  const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
-<style>${VIEW_CSS}</style>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src ${fontCsp};">
+<style>${VIEW_CSS.replace(/__CODICON_FONT_URI__/g, fontUri)}</style>
 </head>
 <body>
 <div class="launcher" id="root"><div class="empty">加载中…</div></div>
@@ -140,10 +159,13 @@ export function buildLauncherHtml(): string {
   var vscode = acquireVsCodeApi();
   var root = document.getElementById("root");
   var expanded = {}; // workspaceId -> true (default all expanded)
-  var ICONS = ${JSON.stringify(ICONS)};
+  var CODICONS = ${JSON.stringify(CODICONS)};
 
   function esc(s) {
     return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function icon(kind, cls) {
+    return '<span class="codicon ' + (CODICONS[kind] || "codicon-circle-outline") + ' icon' + (cls ? " " + cls : "") + '"></span>';
   }
   function rel(ms) {
     if (!Number.isFinite(ms) || ms <= 0) return "";
@@ -154,16 +176,12 @@ export function buildLauncherHtml(): string {
     return Math.floor(d / 86400000) + " 天前";
   }
 
-  function icon(name, cls) {
-    return '<span class="icon' + (cls ? " " + cls : "") + '">' + ICONS[name] + "</span>";
-  }
-
   function rowClick(ev) {
     var t = ev.target.closest ? ev.target.closest("[data-click]") : null;
     if (!t || !vscode) return;
-    // Clicks on any action button / menu inside the row are handled by
-    // actionClick (and must NOT also open the row).
-    if (ev.target.closest && (ev.target.closest("button") || ev.target.closest(".actions"))) return;
+    // Clicks inside a row's action area are handled by actionClick (and must
+    // NOT also open the row). Toolbar buttons carry data-click themselves.
+    if (ev.target.closest && ev.target.closest(".actions")) return;
     var msg = { type: "click", kind: t.getAttribute("data-click") };
     if (t.getAttribute("data-session")) msg.sessionId = t.getAttribute("data-session");
     if (t.getAttribute("data-ws")) msg.workspaceId = t.getAttribute("data-ws");
@@ -215,14 +233,11 @@ export function buildLauncherHtml(): string {
       + '<span class="label">' + esc(statusLabel) + '</span>'
       + (d.project ? '<span class="desc">' + esc(d.project.split(/[\\\\/]/).pop() || d.project) + "</span>" : "")
       + "</div>";
-    // 新建会话
-    out += '<div class="row" data-click="new-session" title="新建会话">'
-      + icon("plus", "green")
-      + '<span class="label">新建会话</span></div>';
-    // 设置
-    out += '<div class="row" data-click="settings" title="设置">'
-      + icon("gear", "")
-      + '<span class="label">设置</span></div>';
+    // top toolbar: 新建会话 / 设置 — one row, always visible
+    out += '<div class="toolbar">'
+      + '<button class="toolbtn" data-click="new-session" title="新建会话">' + icon("plus", "green") + "新建会话</button>"
+      + '<button class="toolbtn" data-click="settings" title="设置">' + icon("gear", "") + "设置</button>"
+      + "</div>";
     // workspaces
     out += '<div class="section">工作区</div>';
     var archived = {};
@@ -251,8 +266,8 @@ export function buildLauncherHtml(): string {
         + '<span class="label">' + esc(ws.title || (ws.path || "").split(/[\\\\/]/).pop()) + '</span>'
         + (visible.length > 0 ? '<span class="desc">' + visible.length + " 个会话</span>" : "")
         + '<span class="actions">'
-        + '<button class="iconbtn" data-action="new-session" data-ws="' + esc(ws.workspaceId) + '" title="在当前工作区新建会话">' + ICONS.plus + "</button>"
-        + '<button class="iconbtn" data-action="ws-more" title="更多">' + ICONS.more + "</button>"
+        + '<button class="iconbtn" data-action="new-session" data-ws="' + esc(ws.workspaceId) + '" title="在当前工作区新建会话">' + icon("plus") + "</button>"
+        + '<button class="iconbtn" data-action="ws-more" title="更多">' + icon("more") + "</button>"
         + '<span class="more-menu">'
         + '<div class="mi" data-action="rename-workspace" data-title="' + esc(ws.title || "") + '">重命名</div>'
         + '<div class="mi danger" data-action="delete-workspace">删除工作区</div>'
@@ -269,13 +284,13 @@ export function buildLauncherHtml(): string {
         if (!sess) continue;
         var ttl = sess.title || (sess.blank ? "新会话" : sess.sessionId.slice(0, 8));
         out += '<div class="row session-row" data-click="session" data-session="' + esc(sess.sessionId) + '" title="' + esc(ttl) + '">'
-          + (sess.blank ? icon("plus", "yellow") : sess.running ? icon("chat", "green") : icon("chat", ""))
+          + (sess.blank ? icon("plus", "yellow") : sess.running ? icon("chatRunning", "green") : icon("chat", ""))
           + '<span class="label">' + esc(ttl) + "</span>"
           + '<span class="desc">' + rel(sess.updatedAt) + "</span>"
           + '<span class="actions">'
-          + '<button class="iconbtn" data-action="rename" data-session="' + esc(sess.sessionId) + '" data-title="' + esc(ttl) + '" title="重命名">' + ICONS.edit + "</button>"
-          + '<button class="iconbtn" data-action="fork" data-session="' + esc(sess.sessionId) + '" title="分叉会话">' + ICONS.fork + "</button>"
-          + '<button class="iconbtn" data-action="archive" data-session="' + esc(sess.sessionId) + '" title="归档会话">' + ICONS.trash + "</button>"
+          + '<button class="iconbtn" data-action="rename" data-session="' + esc(sess.sessionId) + '" data-title="' + esc(ttl) + '" title="重命名">' + icon("edit") + "</button>"
+          + '<button class="iconbtn" data-action="fork" data-session="' + esc(sess.sessionId) + '" title="分叉会话">' + icon("fork") + "</button>"
+          + '<button class="iconbtn" data-action="archive" data-session="' + esc(sess.sessionId) + '" title="归档会话">' + icon("trash") + "</button>"
           + "</span></div>";
       }
       out += "</div></div>";
@@ -286,6 +301,7 @@ export function buildLauncherHtml(): string {
 </script>
 </body>
 </html>`;
+  return html;
 }
 
 // ------------------------------------------------------------------ provider
@@ -302,6 +318,7 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
   constructor(
     private readonly manager: DshManager,
     private readonly onEvent: (event: LauncherEvent) => void,
+    private readonly extensionUri: vscode.Uri,
     private readonly refreshIntervalMs = 4000
   ) {}
 
@@ -325,7 +342,8 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     view.webview.options = { enableScripts: true };
-    view.webview.html = buildLauncherHtml();
+    const fontUri = view.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "codicon.ttf")).toString();
+    view.webview.html = buildLauncherHtml(fontUri, view.webview.cspSource);
     view.webview.onDidReceiveMessage((message: LauncherEvent) => {
       if (message === null || typeof message !== "object") return;
       this.onEvent(message);
