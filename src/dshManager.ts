@@ -110,6 +110,10 @@ const MAX_AUTO_RESTARTS = 2;
 const WATCH_INTERVAL_MS = 5_000;
 /** Consecutive failed probes before the server is declared dead. */
 const WATCH_FAILURES_TO_DIE = 2;
+/** Back-fill cooldown per session for the session/follow projection read. */
+const TITLE_BACKFILL_COOLDOWN_MS = 60_000;
+/** Max sessions whose missing projection is back-filled per list round. */
+const TITLE_BACKFILL_PER_ROUND = 3;
 
 /**
  * Compare two dsh version strings (semver-ish, e.g. "0.1.0-rc.7").
@@ -164,6 +168,11 @@ export class DshManager {
   private browserAuth = false;
   private authCookie?: string;
   private guiProxy?: GuiProxy;
+  /** sessionId → last known title (list projections are not always present;
+   * see fetchSessionTitle). */
+  private titleCache = new Map<string, string>();
+  /** sessionId → last time its missing projection was back-filled. */
+  private titleFetchAt = new Map<string, number>();
   private detail?: string;
   private project?: string;
   private disposed = false;
@@ -860,16 +869,115 @@ export class DshManager {
           }>;
         }
       | undefined;
-    return value?.items?.map((it) => ({
-      sessionId: it.sessionId,
-      updatedAt: it.updatedAt,
-      cwd: it.cwd,
-      running: it.running,
-      blank: it.blank,
-      title: it.projections?.values?.title,
-      turns: it.projections?.values?.sessionStats?.turns,
-      steps: it.projections?.values?.sessionStats?.steps
-    }));
+    // On dsh 0.1.2+ the session title lives in the (cached) projections. A few
+    // migrated/legacy sessions occasionally lack them on list; those are
+    // back-filled via a one-shot session/follow read (which also completes the
+    // server-side projection), so the launcher shows real titles.
+    const missing: string[] = [];
+    const sessions = (value?.items ?? []).map((it) => {
+      let title = it.projections?.values?.title;
+      if (title !== undefined && title !== "") {
+        this.titleCache.set(it.sessionId, title);
+      } else {
+        title = this.titleCache.get(it.sessionId);
+        if (title === undefined) missing.push(it.sessionId);
+      }
+      return {
+        sessionId: it.sessionId,
+        updatedAt: it.updatedAt,
+        cwd: it.cwd,
+        running: it.running,
+        blank: it.blank,
+        title,
+        turns: it.projections?.values?.sessionStats?.turns,
+        steps: it.projections?.values?.sessionStats?.steps
+      };
+    });
+    if (this.browserAuth && missing.length > 0) void this.backfillSessionTitles(missing);
+    return sessions;
+  }
+
+  /**
+   * Lazily complete the missing session projections (titles) for a few
+   * sessions per round: subscribing to the alpha.2 `session/follow` stream
+   * returns a snapshot whose `projections.values.title` is the durable title
+   * and also makes the server back-fill the projection, so the next plain
+   * `session.list` carries it too.
+   */
+  private async backfillSessionTitles(ids: string[]): Promise<void> {
+    const now = Date.now();
+    const todo = ids
+      .filter((id) => now - (this.titleFetchAt.get(id) ?? 0) >= TITLE_BACKFILL_COOLDOWN_MS)
+      .slice(0, TITLE_BACKFILL_PER_ROUND);
+    if (todo.length === 0) return;
+    await Promise.all(
+      todo.map(async (id) => {
+        this.titleFetchAt.set(id, now);
+        const title = await this.fetchSessionTitle(id);
+        if (title !== undefined && title !== "") {
+          this.titleCache.set(id, title);
+          this.opts.log(`session title back-fill: ${id.slice(0, 24)}… → "${title}"`);
+        }
+      })
+    );
+  }
+
+  /** Read one session's snapshot projections over the mux stream. */
+  private async fetchSessionTitle(sessionId: string): Promise<string | undefined> {
+    const u = this.parsedUrl();
+    if (u === undefined) return undefined;
+    const cookie = await this.ensureAuthCookie(u);
+    if (cookie === undefined) return undefined;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const WebSocket: any = require("ws");
+    return await new Promise((resolve) => {
+      let settled = false;
+      let ws: any;
+      const finish = (value: string | undefined): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          ws?.close();
+        } catch {
+          /* already closed */
+        }
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(undefined), 8_000);
+      try {
+        ws = new WebSocket(`ws://${u.host}/api/remote.mux`, { headers: { Cookie: cookie } });
+      } catch {
+        finish(undefined);
+        return;
+      }
+      ws.on("open", () => {
+        ws.send(
+          JSON.stringify({
+            type: "open",
+            streamId: `dsh-title-${Date.now()}`,
+            endpoint: "session/follow",
+            payload: { args: { request: { address: { kind: "session", sessionId } } } }
+          })
+        );
+      });
+      ws.on("message", (data: unknown) => {
+        let msg: any;
+        try {
+          msg = JSON.parse(String(data));
+        } catch {
+          return;
+        }
+        if (msg?.type === "item" && msg.value?.type === "snapshot" && msg.value.projections?.values !== undefined) {
+          const title = msg.value.projections.values.title;
+          finish(typeof title === "string" && title !== "" ? title : undefined);
+        } else if (msg?.type === "error" || msg?.type === "end") {
+          finish(undefined);
+        }
+      });
+      ws.on("error", () => finish(undefined));
+      ws.on("close", () => finish(undefined));
+    });
   }
 
   /** Search sessions (launcher search box). Tries the harness content search;
