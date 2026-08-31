@@ -145,8 +145,8 @@ async function scenarioAdopt(cliPath: string | undefined): Promise<void> {
   });
   await second.start();
   check("second manager adopts the running server", second.info.state === "running" && second.info.external === true, `state=${second.info.state} external=${second.info.external}`);
-  const adoptAuth = /[?&]token=/.test(first.info.url ?? "");
-  check("adopted server supports split panels", second.info.panelSupport === !adoptAuth, `panelSupport=${second.info.panelSupport}`);
+  check("adopted server supports split panels", second.info.panelSupport === true, `panelSupport=${second.info.panelSupport}`);
+  check("adopted server exposes a gui proxy", /^http:\/\/127\.0\.0\.1:\d+\/$/.test(second.info.guiUrl ?? ""), `guiUrl=${second.info.guiUrl ?? "none"}`);
 
   await second.stop();
   check("stopping the adopter leaves the server alive", first.info.state === "running", `first state=${first.info.state}`);
@@ -251,18 +251,25 @@ async function main(): Promise<void> {
   const base = guiUrl.origin;
   check(
     "frontend supports split panels",
-    manager.info.panelSupport === !auth,
+    manager.info.panelSupport === true,
     `panelSupport=${manager.info.panelSupport} browserAuth=${auth}`
   );
-  if (!auth) {
-    const side = await httpJson("GET", url + "/?dshPanel=sidebar");
+  // The webview must embed through the GuiProxy (dsh 0.1.2+): the proxy
+  // injects the browser cookie, so the very same pages that a cross-origin
+  // iframe would 401 on are now served, query params included.
+  const embedBase = (manager.info.guiUrl ?? url).replace(/\/$/, "");
+  if (auth) {
+    check("gui proxy URL available", manager.info.guiUrl !== undefined, `guiUrl=${manager.info.guiUrl ?? "none"}`);
+    const proxyRoot = await httpJson("GET", embedBase + "/");
+    check("gui proxy serves the SPA", proxyRoot.status === 200 && proxyRoot.text.includes("__DSH_BOOT__"), `status=${proxyRoot.status}`);
+  }
+  {
+    const side = await httpJson("GET", embedBase + "/?dshPanel=sidebar");
     check("GET /?dshPanel=sidebar → 200", side.status === 200, `status=${side.status}`);
     check("sidebar panel page carries the marker", side.text.includes("dsh-vscode-panel"), "panel marker missing");
-    const center = await httpJson("GET", url + "/?dshPanel=center");
+    const center = await httpJson("GET", embedBase + "/?dshPanel=center");
     check("GET /?dshPanel=center → 200", center.status === 200, `status=${center.status}`);
     check("center panel page carries the marker", center.text.includes("dsh-vscode-panel"), "panel marker missing");
-  } else {
-    console.log("  (browser-session auth: split-panel iframes are not loadable — webview falls back to open-in-browser)");
   }
   const injected = injectPanelSupport("<html><head></head></html>");
   check("injectPanelSupport injects once", injected !== undefined && (injected as string).includes("dsh-vscode-panel"), "inject failed");
@@ -323,8 +330,14 @@ async function main(): Promise<void> {
     const escapedPath = projectDir.replace(/\\/g, "\\\\");
     check("workspace.list contains the project path", wsList.status === 200 && wsList.text.includes(escapedPath), `status=${wsList.status} body=${wsList.text.slice(0, 300)}`);
   } else {
-    const derivedWs = await manager.listWorkspaces();
-    check("derived workspaces contain the project path", (derivedWs?.items ?? []).some((w) => w.path === projectDir), `derived=${JSON.stringify((derivedWs?.items ?? []).map((w) => w.path))}`);
+    // dsh 0.1.2+ has no unary workspace.list: the manager subscribes to the
+    // workspace/follow stream for the baseline (workspaces + archive set).
+    const baseline = await manager.listWorkspaces();
+    check(
+      "workspace/follow baseline contains the project path",
+      (baseline?.items ?? []).some((w) => w.path === projectDir),
+      `items=${JSON.stringify((baseline?.items ?? []).map((w) => w.path))} archived=${JSON.stringify(baseline?.archivedSessionIds ?? null)}`
+    );
   }
   const sessions = await manager.listSessions();
   check("session.list reports the project cwd", (sessions ?? []).some((s) => s.cwd === projectDir), `sessions=${JSON.stringify(sessions?.map((s) => ({ id: s.sessionId, cwd: s.cwd })))}`);

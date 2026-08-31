@@ -243,7 +243,12 @@ export function launcherBody(info?: DshRuntimeInfo): string {
       ? `<div class="status">📁 ${escapeHtml(info.project)}</div>`
       : "";
   if (info?.state === "running" && info.url !== undefined) {
-    if (info.browserAuth === true) {
+    // dsh 0.1.2+ browsers authenticate with a SameSite=Strict cookie that a
+    // cross-origin webview iframe cannot carry; the local GuiProxy injects it
+    // server-side, so the SPA embeds normally via guiUrl. No proxy → fall back
+    // to open-in-browser.
+    const embedBase = info.guiUrl ?? info.url;
+    if (info.browserAuth === true && info.guiUrl === undefined) {
       return browserAuthFallback(info.url, status, project);
     }
     if (info.panelSupport === false) {
@@ -257,7 +262,7 @@ export function launcherBody(info?: DshRuntimeInfo): string {
   ${status}
 </div>`;
     }
-    const src = panelSrc(info.url, "sidebar", true);
+    const src = panelSrc(embedBase, "sidebar", true);
     return `<div class="launcher">
   ${guiIframeHtml(src, "DeepSeek Harness — sessions")}
   ${project}
@@ -314,10 +319,11 @@ export function stateBody(info?: DshRuntimeInfo, sessionId?: string, opts?: { se
       const url = info.url ?? "";
       // Editor area = the GUI's center column (conversation + details), no
       // sidebar. Full GUI when the frontend lacks split-panel support.
-      if (info.browserAuth === true) {
+      const embedBase = info.guiUrl ?? url;
+      if (info.browserAuth === true && info.guiUrl === undefined) {
         return browserAuthFallback(url, "");
       }
-      const src = panelSrc(url, "center", info.panelSupport !== false, sessionId, opts);
+      const src = panelSrc(embedBase, "center", info.panelSupport !== false, sessionId, opts);
       return guiIframeHtml(src, "DeepSeek Harness");
     }
     case "locating":
