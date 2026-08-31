@@ -37,7 +37,10 @@ function parseArgs(argv: string[]): Cli {
   return cli;
 }
 
-function httpJson(method: string, url: string, body?: unknown): Promise<{ status: number; text: string }> {
+function httpJson(method: string, url: string, body?: unknown, cookie?: string): Promise<{ status: number; text: string }> {
+  const headers: Record<string, string> = {};
+  if (cookie !== undefined) headers.Cookie = cookie;
+  if (body !== undefined) headers["content-type"] = "application/json";
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const req = http.request(
@@ -46,7 +49,7 @@ function httpJson(method: string, url: string, body?: unknown): Promise<{ status
         hostname: u.hostname,
         port: u.port,
         path: u.pathname + u.search,
-        headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+        headers,
         timeout: 10_000
       },
       (res) => {
@@ -58,6 +61,38 @@ function httpJson(method: string, url: string, body?: unknown): Promise<{ status
     req.on("error", reject);
     req.on("timeout", () => req.destroy(new Error("timeout")));
     if (body !== undefined) req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+/** Mint the browser-session cookie for a dsh 0.1.2+ token URL (GET /?token=… → 303 + Set-Cookie). */
+function mintCookie(url: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    let u: URL;
+    try {
+      u = new URL(url);
+    } catch {
+      resolve(undefined);
+      return;
+    }
+    const token = u.searchParams.get("token");
+    if (token === undefined || token === null || token === "") {
+      resolve(undefined);
+      return;
+    }
+    const req = http.request(u.origin + "/?token=" + encodeURIComponent(token), (res) => {
+      const sc = res.headers["set-cookie"] as string[] | undefined;
+      res.resume();
+      res.on("end", () => {
+        const cookie = Array.isArray(sc) ? sc[0] : sc;
+        resolve(cookie !== undefined && cookie !== "" ? cookie.split(";")[0] : undefined);
+      });
+    });
+    req.setTimeout(8_000, () => {
+      req.destroy();
+      resolve(undefined);
+    });
+    req.on("error", () => resolve(undefined));
     req.end();
   });
 }
@@ -76,7 +111,10 @@ function check(name: string, cond: boolean, detail?: string): void {
 async function scenarioAdopt(cliPath: string | undefined): Promise<void> {
   console.log("— adopt —");
   const homeA = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
-  const homeB = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
+  // Same home on purpose: dsh 0.1.2+ authenticates browsers with a cookie
+  // signed by the owner secret in $DSH_HOME/.credentials.yaml, so an adopter
+  // must share the home (it forges the cookie; it never sees the launch token).
+  const homeB = homeA;
   const first = new DshManager({
     port: 0,
     home: homeA,
@@ -84,8 +122,8 @@ async function scenarioAdopt(cliPath: string | undefined): Promise<void> {
     autoInstall: false,
     autoRestart: false,
     cwd: homeA,
-    onInfo: () => {},
-    log: () => {}
+    onInfo: (info) => console.log(`  [stateA] ${JSON.stringify(info)}`),
+    log: (line) => console.log(`  [dshA] ${line}`)
   });
   await first.start();
   const url = first.info.url;
@@ -102,12 +140,13 @@ async function scenarioAdopt(cliPath: string | undefined): Promise<void> {
     autoInstall: false,
     autoRestart: false,
     cwd: homeB,
-    onInfo: () => {},
-    log: () => {}
+    onInfo: (info) => console.log(`  [stateB] ${JSON.stringify(info)}`),
+    log: (line) => console.log(`  [dshB] ${line}`)
   });
   await second.start();
   check("second manager adopts the running server", second.info.state === "running" && second.info.external === true, `state=${second.info.state} external=${second.info.external}`);
-  check("adopted server supports split panels", second.info.panelSupport === true, `panelSupport=${second.info.panelSupport}`);
+  const adoptAuth = /[?&]token=/.test(first.info.url ?? "");
+  check("adopted server supports split panels", second.info.panelSupport === !adoptAuth, `panelSupport=${second.info.panelSupport}`);
 
   await second.stop();
   check("stopping the adopter leaves the server alive", first.info.state === "running", `first state=${first.info.state}`);
@@ -179,6 +218,9 @@ async function main(): Promise<void> {
 
   const cli = parseArgs(process.argv.slice(2));
   const home = cli.home ?? fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
+  // The manager spawns the server with cwd = home; ensure it exists even when
+  // --home points at a path that has been cleaned up.
+  fs.mkdirSync(home, { recursive: true });
   console.log(`smoke: DSH_HOME=${home} port=${cli.port} cli=${cli.cliPath ?? "(auto)"}`);
 
   const manager = new DshManager({
@@ -204,59 +246,86 @@ async function main(): Promise<void> {
   }
 
   console.log("— split panels —");
-  check("frontend supports split panels", manager.info.panelSupport === true, `panelSupport=${manager.info.panelSupport}`);
-  const side = await httpJson("GET", url + "/?dshPanel=sidebar");
-  check("GET /?dshPanel=sidebar → 200", side.status === 200, `status=${side.status}`);
-  check("sidebar panel page carries the marker", side.text.includes("dsh-vscode-panel"), "panel marker missing");
-  const center = await httpJson("GET", url + "/?dshPanel=center");
-  check("GET /?dshPanel=center → 200", center.status === 200, `status=${center.status}`);
-  check("center panel page carries the marker", center.text.includes("dsh-vscode-panel"), "panel marker missing");
+  const guiUrl = new URL(url);
+  const auth = guiUrl.searchParams.get("token") !== null;
+  const base = guiUrl.origin;
+  check(
+    "frontend supports split panels",
+    manager.info.panelSupport === !auth,
+    `panelSupport=${manager.info.panelSupport} browserAuth=${auth}`
+  );
+  if (!auth) {
+    const side = await httpJson("GET", url + "/?dshPanel=sidebar");
+    check("GET /?dshPanel=sidebar → 200", side.status === 200, `status=${side.status}`);
+    check("sidebar panel page carries the marker", side.text.includes("dsh-vscode-panel"), "panel marker missing");
+    const center = await httpJson("GET", url + "/?dshPanel=center");
+    check("GET /?dshPanel=center → 200", center.status === 200, `status=${center.status}`);
+    check("center panel page carries the marker", center.text.includes("dsh-vscode-panel"), "panel marker missing");
+  } else {
+    console.log("  (browser-session auth: split-panel iframes are not loadable — webview falls back to open-in-browser)");
+  }
   const injected = injectPanelSupport("<html><head></head></html>");
   check("injectPanelSupport injects once", injected !== undefined && (injected as string).includes("dsh-vscode-panel"), "inject failed");
   check("injectPanelSupport is idempotent", injectPanelSupport(injected as string) === undefined, "second inject should be skipped");
 
   console.log("— wire —");
-  const root = await httpJson("GET", url + "/");
+  let cookie: string | undefined;
+  if (auth) {
+    cookie = await mintCookie(url);
+    check("minted browser-session cookie", cookie !== undefined && cookie !== "", `cookie=${cookie === undefined ? "none" : "ok"}`);
+  }
+  const root = await httpJson("GET", base + "/", undefined, cookie);
   check("GET / → 200", root.status === 200, `status=${root.status}`);
   check("index.html carries __DSH_BOOT__", root.text.includes("__DSH_BOOT__"), "boot manifest missing");
   check("index.html is the DSH SPA", root.text.includes("DeepSeek Harness"));
 
   // The trust fence must PASS for a loopback Host with no Origin (extension-host style).
-  const envelope = { type: "client-request", rpcId: "smoke-1", method: "llm.providers", payload: {} };
-  const rpc = await httpJson("POST", url + "/api/llm.providers", envelope);
-  check("POST /api/llm.providers is not 403 (trust fence passed)", rpc.status !== 403, `status=${rpc.status}`);
-  check("POST /api/llm.providers answers an RPC envelope", rpc.status === 200 && rpc.text.includes("server-response"), `status=${rpc.status} body=${rpc.text.slice(0, 120)}`);
-  check("llm.providers succeeds", rpc.status === 200 && rpc.text.includes('"ok":true'), `body=${rpc.text.slice(0, 200)}`);
+  // `llm.providers` was renamed to the typert wire (`session/list`, {args:…}) on
+  // browser-session-auth servers; pick the form the server speaks.
+  const wireMethod = auth ? "session/list" : "llm.providers";
+  const wirePayload = auth ? { args: { _request: {} } } : {};
+  const envelope = { type: "client-request", rpcId: "smoke-1", method: wireMethod, payload: wirePayload };
+  const rpc = await httpJson("POST", base + "/api/" + wireMethod, envelope, cookie);
+  check(`POST /api/${wireMethod} is not 403 (trust fence passed)`, rpc.status !== 403, `status=${rpc.status}`);
+  check(`POST /api/${wireMethod} answers an RPC envelope`, rpc.status === 200 && rpc.text.includes("server-response"), `status=${rpc.status} body=${rpc.text.slice(0, 120)}`);
+  check(`${wireMethod} succeeds`, rpc.status === 200 && rpc.text.includes('"ok":true'), `body=${rpc.text.slice(0, 200)}`);
 
-  const badBody = await httpJson("POST", url + "/api/llm.providers", { not: "an envelope" });
+  const badBody = await httpJson("POST", base + "/api/" + wireMethod, { not: "an envelope" }, cookie);
   check("malformed envelope → schema error envelope", badBody.status === 200 && badBody.text.includes("invalid client-request message"), `status=${badBody.status} body=${badBody.text.slice(0, 120)}`);
 
-  const unknown = await httpJson("POST", url + "/api/__smoke_nope__", envelope);
+  const unknown = await httpJson("POST", base + "/api/__smoke_nope__", envelope, cookie);
   check("unknown endpoint → 404", unknown.status === 404, `status=${unknown.status}`);
 
-  const created = await httpJson("POST", url + "/api/session.create", {
-    type: "client-request",
-    rpcId: "smoke-2",
-    method: "session.create",
-    payload: {}
-  });
-  check("session.create succeeds", created.status === 200 && created.text.includes('"ok":true') && created.text.includes("sessionId"), `status=${created.status} body=${created.text.slice(0, 160)}`);
+  if (!auth) {
+    const created = await httpJson("POST", base + "/api/session.create", {
+      type: "client-request",
+      rpcId: "smoke-2",
+      method: "session.create",
+      payload: {}
+    }, cookie);
+    check("session.create succeeds", created.status === 200 && created.text.includes('"ok":true') && created.text.includes("sessionId"), `status=${created.status} body=${created.text.slice(0, 160)}`);
+  }
 
-  const get = await httpJson("GET", url + "/api/llm.providers");
+  const get = await httpJson("GET", base + "/api/" + wireMethod, undefined, cookie);
   check("GET /api/<endpoint> → 404/426 (not 403)", get.status !== 403, `status=${get.status}`);
 
   console.log("— workspace & theme —");
   const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-project-"));
   const wsSession = await manager.createSessionInWorkspace(projectDir);
   check("createSessionInWorkspace returns a session", wsSession !== undefined, `sessionId=${wsSession ?? "none"}`);
-  const wsList = await httpJson("POST", url + "/api/workspace.list", {
-    type: "client-request",
-    rpcId: "smoke-ws",
-    method: "workspace.list",
-    payload: {}
-  });
-  const escapedPath = projectDir.replace(/\\/g, "\\\\");
-  check("workspace.list contains the project path", wsList.status === 200 && wsList.text.includes(escapedPath), `status=${wsList.status} body=${wsList.text.slice(0, 300)}`);
+  if (!auth) {
+    const wsList = await httpJson("POST", base + "/api/workspace.list", {
+      type: "client-request",
+      rpcId: "smoke-ws",
+      method: "workspace.list",
+      payload: {}
+    }, cookie);
+    const escapedPath = projectDir.replace(/\\/g, "\\\\");
+    check("workspace.list contains the project path", wsList.status === 200 && wsList.text.includes(escapedPath), `status=${wsList.status} body=${wsList.text.slice(0, 300)}`);
+  } else {
+    const derivedWs = await manager.listWorkspaces();
+    check("derived workspaces contain the project path", (derivedWs?.items ?? []).some((w) => w.path === projectDir), `derived=${JSON.stringify((derivedWs?.items ?? []).map((w) => w.path))}`);
+  }
   const sessions = await manager.listSessions();
   check("session.list reports the project cwd", (sessions ?? []).some((s) => s.cwd === projectDir), `sessions=${JSON.stringify(sessions?.map((s) => ({ id: s.sessionId, cwd: s.cwd })))}`);
   const themeOk = await manager.applyTheme("dark");

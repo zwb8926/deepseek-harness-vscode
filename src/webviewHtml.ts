@@ -160,6 +160,23 @@ function actionsHtml(actions: Array<[string, string]>): string {
   return `<div class="actions">${buttons}</div>`;
 }
 
+/** Browser-session auth fallback (dsh 0.1.2+): the GUI exchanges ?token= for
+ * a SameSite=Strict cookie at GET /, so a cross-origin webview iframe cannot
+ * authenticate. The webview shows the URL and offers the browser instead. */
+function browserAuthFallback(url: string, status: string, extra?: string): string {
+  return `<div class="launcher">
+  <div class="hint">
+    <h1>DeepSeek Harness</h1>
+    <p>当前 dsh 使用浏览器会话鉴权（Cookie），无法在 VS Code 内嵌面板中打开 GUI。</p>
+    <p>请在浏览器中打开（左侧栏的会话与工作区仍可正常使用）。</p>
+    <p><code>${escapeHtml(url)}</code></p>
+    ${actionsHtml([["open-browser", "在浏览器打开"], ["show-logs", "查看日志"]])}
+  </div>
+  ${extra ?? ""}
+  ${status}
+</div>`;
+}
+
 function placeholderHtml(title: string, detail: string): string {
   return `<div class="placeholder">
   <div class="spinner"></div>
@@ -226,6 +243,9 @@ export function launcherBody(info?: DshRuntimeInfo): string {
       ? `<div class="status">📁 ${escapeHtml(info.project)}</div>`
       : "";
   if (info?.state === "running" && info.url !== undefined) {
+    if (info.browserAuth === true) {
+      return browserAuthFallback(info.url, status, project);
+    }
     if (info.panelSupport === false) {
       return `<div class="launcher">
   <div class="hint">
@@ -294,6 +314,9 @@ export function stateBody(info?: DshRuntimeInfo, sessionId?: string, opts?: { se
       const url = info.url ?? "";
       // Editor area = the GUI's center column (conversation + details), no
       // sidebar. Full GUI when the frontend lacks split-panel support.
+      if (info.browserAuth === true) {
+        return browserAuthFallback(url, "");
+      }
       const src = panelSrc(url, "center", info.panelSupport !== false, sessionId, opts);
       return guiIframeHtml(src, "DeepSeek Harness");
     }

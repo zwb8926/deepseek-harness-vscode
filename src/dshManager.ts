@@ -18,6 +18,7 @@
  */
 
 import { spawn, ChildProcess } from "node:child_process";
+import { createHash, createHmac } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as http from "node:http";
@@ -50,6 +51,11 @@ export interface DshRuntimeInfo {
   /** True when the served frontend understands ?dshPanel=sidebar|center
    * (split-panel mode). False → the UI falls back to the full GUI. */
   panelSupport?: boolean;
+  /** True when the dsh server guards the GUI with a browser-session cookie
+   * (launch-token exchange at GET /, dsh 0.1.2+). Such a GUI cannot be
+   * embedded in a cross-origin webview iframe, so the UI falls back to
+   * open-in-browser regardless of panelSupport. */
+  browserAuth?: boolean;
   /** Human-readable detail, usually an error message. */
   detail?: string;
   /** The current VS Code project directory resolved at click time. */
@@ -150,6 +156,8 @@ export class DshManager {
   private url?: string;
   private external = false;
   private panelSupport?: boolean;
+  private browserAuth = false;
+  private authCookie?: string;
   private detail?: string;
   private project?: string;
   private disposed = false;
@@ -188,6 +196,7 @@ export class DshManager {
       url: this.url,
       external: this.external,
       panelSupport: this.panelSupport,
+      browserAuth: this.browserAuth,
       detail: this.detail,
       project: this.project
     };
@@ -210,19 +219,35 @@ export class DshManager {
   }
 
   /** Probe one URL with a short timeout. Returns the response status text, or
-   * undefined when the server is unreachable. */
-  private probe(url: string, timeoutMs = 2_500): Promise<number | undefined> {
+   * undefined when the server is unreachable. Follows the browser-session
+   * cookie flow when the server requires it. */
+  private async probe(url: string, timeoutMs = 2_500): Promise<number | undefined> {
+    const r = await this.authedGet(url, "/", timeoutMs);
+    return r?.status;
+  }
+
+  /** One plain HTTP GET (no redirect following). Captures the status, the
+   * (small) body, and the session cookie minted by a token exchange. */
+  private httpGetOnce(
+    target: string,
+    headers: http.OutgoingHttpHeaders = {},
+    timeoutMs = 4_000
+  ): Promise<{ status: number; body: string; setCookie?: string } | undefined> {
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (value: number | undefined): void => {
+      const finish = (value: { status: number; body: string; setCookie?: string } | undefined): void => {
         if (!settled) {
           settled = true;
           resolve(value);
         }
       };
-      const req = http.get(url, { timeout: timeoutMs }, (res) => {
-        finish(res.statusCode);
-        res.resume();
+      const req = http.get(target, { headers, timeout: timeoutMs }, (res) => {
+        let body = "";
+        res.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
+        res.on("end", () => {
+          const sc = res.headers["set-cookie"];
+          finish({ status: res.statusCode ?? 0, body, setCookie: Array.isArray(sc) ? sc[0] : sc });
+        });
       });
       req.on("timeout", () => {
         finish(undefined);
@@ -232,40 +257,131 @@ export class DshManager {
     });
   }
 
-  private async fetchRoot(url: string): Promise<string | undefined> {
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value: string | undefined): void => {
-        if (!settled) {
-          settled = true;
-          resolve(value);
-        }
-      };
-      const req = http.get(url, { timeout: 3_000 }, (res) => {
-        if (res.statusCode !== 200) {
-          finish(undefined);
-          res.resume();
-          return;
-        }
-        let body = "";
-        res.on("data", (chunk: Buffer) => {
-          body += chunk.toString("utf8");
-          if (body.length > 200_000) req.destroy();
-        });
-        res.on("end", () => finish(body));
-      });
-      req.on("timeout", () => {
-        finish(undefined);
-        req.destroy();
-      });
-      req.on("error", () => finish(undefined));
-    });
+  /** GET one path on the GUI origin, transparently following the dsh
+   * browser-session auth flow when the server uses it (dsh 0.1.2+):
+   * `GET /?token=…` mints an authority-bound cookie; the request is then
+   * repeated with it. Older servers answer the bare root directly. */
+  private async authedGet(url: string, pathQuery = "/", timeoutMs = 4_000): Promise<{ status: number; body: string } | undefined> {
+    let u: URL | undefined;
+    try {
+      u = new URL(url);
+    } catch {
+      return undefined;
+    }
+    const plain = await this.httpGetOnce(u.origin + pathQuery, {}, timeoutMs);
+    if (plain !== undefined && plain.status === 200) return { status: plain.status, body: plain.body };
+    if (plain === undefined) return undefined;
+    const cookie = await this.ensureAuthCookie(u);
+    if (cookie === undefined) return undefined;
+    const authed = await this.httpGetOnce(u.origin + pathQuery, { Cookie: cookie }, timeoutMs);
+    if (authed !== undefined && authed.status === 200) return { status: authed.status, body: authed.body };
+    if (authed !== undefined && authed.status === 401) {
+      // Stale cookie — mint once more and retry.
+      this.authCookie = undefined;
+      const fresh = await this.ensureAuthCookie(u);
+      if (fresh === undefined) return undefined;
+      const retried = await this.httpGetOnce(u.origin + pathQuery, { Cookie: fresh }, timeoutMs);
+      return retried === undefined ? undefined : { status: retried.status, body: retried.body };
+    }
+    return authed === undefined ? undefined : { status: authed.status, body: authed.body };
   }
 
   /** Whether the URL answers with the dsh SPA (contains the boot manifest). */
   private async isDshServer(url: string): Promise<boolean> {
-    const body = await this.fetchRoot(url);
-    return body !== undefined && body.includes("__DSH_BOOT__");
+    const r = await this.authedGet(url, "/");
+    return r !== undefined && r.status === 200 && r.body.includes("__DSH_BOOT__");
+  }
+
+  // ----------------------------------------------------------- browser auth
+
+  /** True when the dsh server guards the GUI with the browser-session cookie
+   * flow rather than serving the root directly. */
+  private async detectBrowserAuth(url: string): Promise<boolean> {
+    let u: URL | undefined;
+    try {
+      u = new URL(url);
+    } catch {
+      return false;
+    }
+    if (u.searchParams.get("token") !== null) return true;
+    const plain = await this.httpGetOnce(u.origin + "/");
+    return plain !== undefined && (plain.status === 401 || plain.status === 303);
+  }
+
+  /** Exchange the process launch token (?token= in the printed URL) for the
+   * browser-session cookie; undefined when there is no token flow. */
+  private async mintAuthCookie(u: URL): Promise<string | undefined> {
+    const token = u.searchParams.get("token");
+    if (token === undefined || token === null || token === "") return undefined;
+    const res = await this.httpGetOnce(`${u.origin}/?token=${encodeURIComponent(token)}`);
+    const cookie = res?.setCookie?.split(";")[0]?.trim();
+    return cookie !== undefined && cookie !== "" ? cookie : undefined;
+  }
+
+  /**
+   * Forge a browser-session cookie from `$DSH_HOME/.credentials.yaml`.
+   *
+   * Adopted servers (e.g. an `npx dsh web` already running on the port) share
+   * the DSH_HOME — and therefore the owner-scoped signing secret — but never
+   * reveal their launch token. The dsh-client-connection cookie format is
+   * `v1.<base64url(json payload)>.<base64url(hmac-sha256(secret, body))>` with
+   * the name `dsh-auth-<base64url(sha256(authority))>`; we mirror it so every
+   * RPC and health check authenticates without the token.
+   */
+  private async forgeAuthCookie(u: URL): Promise<string | undefined> {
+    const secret = await this.readBrowserSessionSecret();
+    if (secret === undefined) return undefined;
+    const key = Buffer.from(secret.replaceAll("-", "+").replaceAll("_", "/"), "base64");
+    if (key.byteLength !== 32) return undefined;
+    const b64u = (buf: Buffer): string => buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+    const authority = u.host;
+    const name = "dsh-auth-" + b64u(createHash("sha256").update(authority).digest());
+    const issuedAt = Date.now();
+    const expiresAt = issuedAt + 30 * 24 * 3600_000;
+    const body = b64u(Buffer.from(JSON.stringify({ version: 1, authority, issuedAt, expiresAt }), "utf8"));
+    const sig = b64u(createHmac("sha256", key).update(body).digest());
+    return `${name}=v1.${body}.${sig}`;
+  }
+
+  /** The owner-scoped browser-session secret from the DSH_HOME credentials
+   * store (best effort — the file format is tiny and stable). */
+  private readBrowserSessionSecret(): string | undefined {
+    const envHome = process.env.DSH_HOME?.trim();
+    const home =
+      this.opts.home !== undefined && this.opts.home.trim() !== ""
+        ? this.opts.home
+        : envHome !== undefined && envHome !== ""
+          ? envHome
+          : path.join(os.homedir(), ".dsh");
+    const file = path.join(home, ".credentials.yaml");
+    let text: string | undefined;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      return undefined;
+    }
+    let inSection = false;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      const topLevel = raw.length > 0 && raw[0] !== " " && raw[0] !== "\t" && line.includes(":");
+      if (!inSection) {
+        if (line.startsWith("client-connection/browser-session:")) inSection = true;
+        continue;
+      }
+      if (topLevel) return undefined; // left the record subtree
+      if (line.startsWith("secret:")) return line.slice("secret:".length).trim();
+    }
+    return undefined;
+  }
+
+  /** Get a browser-session cookie for one server: prefer the launch-token
+   * exchange (own process), fall back to forging from the credentials record
+   * (adopted server on the same DSH_HOME). */
+  private async ensureAuthCookie(u: URL): Promise<string | undefined> {
+    if (this.authCookie !== undefined) return this.authCookie;
+    const cookie = (await this.mintAuthCookie(u)) ?? (await this.forgeAuthCookie(u));
+    if (cookie !== undefined) this.authCookie = cookie;
+    return cookie;
   }
 
   // ------------------------------------------------------- split-panel mode
@@ -279,11 +395,15 @@ export class DshManager {
    * takes effect without a restart. Returns whether the split UI can be used.
    */
   private async ensurePanelSupport(url: string): Promise<boolean> {
+    if (this.browserAuth) {
+      this.opts.log("panel: browser-session auth (token cookie flow) — the webview cannot embed this GUI; open-in-browser fallback");
+      return false;
+    }
     try {
-      const probe = url + "/?dshPanel=sidebar";
-      const body = await this.fetchRoot(probe);
-      if (body !== undefined && body.includes(PANEL_MARKER)) {
-        if (!body.includes(PANEL_INJECT)) {
+      const probe = "/?dshPanel=sidebar";
+      const body = await this.authedGet(url, probe);
+      if (body !== undefined && body.status === 200 && body.body.includes(PANEL_MARKER)) {
+        if (!body.body.includes(PANEL_INJECT)) {
           // Split view works, but the served adapter predates the
           // session-click coordination — best-effort upgrade of the frontend
           // files on disk (the server re-reads index.html per request, so a
@@ -302,8 +422,8 @@ export class DshManager {
         if (patchFrontendIndexFile(file, (line) => this.opts.log(line))) patchedAny = true;
       }
       if (patchedAny) {
-        const again = await this.fetchRoot(probe);
-        if (again !== undefined && again.includes(PANEL_MARKER)) {
+        const again = await this.authedGet(url, probe);
+        if (again !== undefined && again.status === 200 && again.body.includes(PANEL_MARKER)) {
           this.opts.log("panel: frontend patched — split panels enabled");
           return true;
         }
@@ -351,26 +471,80 @@ export class DshManager {
     return files;
   }
 
+  /**
+   * Translate one internal RPC call to the server's actual wire form.
+   *
+   * Pre-0.1.2 servers speak dotted endpoints with a raw field payload
+   * (`session.create` + `{cwd}`). dsh 0.1.2+ (browser-session auth servers,
+   * detected via `browserAuth`) moved to typert's `namespace/method`
+   * endpoints and a `{args: {...}}` envelope with descriptor-named wires
+   * (`session/create` + `{request: {cwd}}`). One notable casualty: the
+   * workspace LIST is no longer a unary RPC (it rides the `workspace/follow`
+   * stream), so callers of `workspace.list` must degrade.
+   */
+  private rpcRequest(method: string, payload: unknown): { endpoint: string; args: Record<string, unknown>; unsupported?: boolean } | undefined {
+    if (!this.browserAuth) return { endpoint: method, args: (payload ?? {}) as Record<string, unknown> };
+    const dotAt = method.indexOf(".");
+    if (dotAt === -1) return { endpoint: method, args: (payload ?? {}) as Record<string, unknown> };
+    const endpoint = method.slice(0, dotAt) + "/" + method.slice(dotAt + 1);
+    if (endpoint === "workspace/list") return { endpoint, args: {}, unsupported: true };
+    const fields = (payload ?? {}) as Record<string, unknown>;
+    switch (endpoint) {
+      // Listers and settings carried their wire names across; everything else
+      // now expects a single `request` field.
+      case "session/list":
+        return { endpoint, args: { _request: {} } };
+      case "session/search":
+      case "session/create":
+      case "session/rename":
+      case "session/fork":
+      case "workspace/create":
+      case "workspace/rename":
+      case "workspace/delete":
+      case "workspace/archiveSession":
+        return { endpoint, args: { request: fields } };
+      default:
+        return { endpoint, args: fields };
+    }
+  }
+
   /** POST one /api RPC envelope; returns the parsed response value or undefined. */
   private async rpc(method: string, payload: unknown): Promise<unknown | undefined> {
-    const url = this.url;
-    if (url === undefined || this.state !== "running") return undefined;
+    if (this.url === undefined || this.state !== "running") return undefined;
+    let u: URL;
+    try {
+      u = new URL(this.url);
+    } catch {
+      return undefined;
+    }
+    const wire = this.rpcRequest(method, payload);
+    if (wire === undefined) return undefined;
+    if (wire.unsupported === true) {
+      this.opts.log(`rpc ${method}: not available on this dsh wire version`);
+      return undefined;
+    }
     const envelope = {
       type: "client-request",
       rpcId: `dsh-vsc-${Date.now()}`,
-      method,
-      payload
+      method: wire.endpoint,
+      // typert wire (0.1.2+): payload = {args: <descriptor fields>}; older
+      // servers take the raw field object.
+      payload: this.browserAuth ? { args: wire.args } : wire.args
     };
+    const body = JSON.stringify(envelope);
+    // Browser-session auth (dsh 0.1.2+): every /api call needs the cookie.
+    const cookie = await this.ensureAuthCookie(u);
+    const headers: http.OutgoingHttpHeaders = {
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(body)
+    };
+    if (cookie !== undefined) headers.Cookie = cookie;
     return new Promise((resolve) => {
-      const body = JSON.stringify(envelope);
       const req = http.request(
-        new URL(`${url}/api/${method}`),
+        new URL(`${u.origin}/api/${wire.endpoint}`),
         {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "content-length": Buffer.byteLength(body)
-          },
+          headers,
           timeout: 15_000
         },
         (res) => {
@@ -383,7 +557,7 @@ export class DshManager {
               };
               if (parsed.result?.ok === true) resolve(parsed.result.value);
               else {
-                this.opts.log(`rpc ${method} failed: ${parsed.result?.error?.message ?? text.slice(0, 200)}`);
+                this.opts.log(`rpc ${wire.endpoint} failed: ${parsed.result?.error?.message ?? text.slice(0, 200)}`);
                 resolve(undefined);
               }
             } catch {
@@ -393,12 +567,12 @@ export class DshManager {
         }
       );
       req.on("timeout", () => {
-        this.opts.log(`rpc ${method} timed out`);
+        this.opts.log(`rpc ${wire.endpoint} timed out`);
         req.destroy();
         resolve(undefined);
       });
       req.on("error", (err) => {
-        this.opts.log(`rpc ${method} error: ${String(err)}`);
+        this.opts.log(`rpc ${wire.endpoint} error: ${String(err)}`);
         resolve(undefined);
       });
       req.end(body);
@@ -522,11 +696,37 @@ export class DshManager {
           archivedSessionIds?: string[];
         }
       | undefined;
-    if (value === undefined) return undefined;
-    return {
-      items: value.items ?? [],
-      archivedSessionIds: value.archivedSessionIds ?? []
-    };
+    if (value !== undefined) {
+      return {
+        items: value.items ?? [],
+        archivedSessionIds: value.archivedSessionIds ?? []
+      };
+    }
+    // dsh 0.1.2+ dropped the unary workspace LIST (the state rides the
+    // workspace/follow stream). Best-effort substitute for the launcher tree:
+    // group the session list by its cwd. Workspace-level actions (rename,
+    // delete, new session) are unavailable for these synthetic records.
+    if (this.browserAuth) {
+      const sessions = await this.listSessions();
+      if (sessions !== undefined) {
+        const byCwd = new Map<string, string[]>();
+        for (const s of sessions) {
+          if (s.cwd === undefined || s.cwd === "") continue;
+          const ids = byCwd.get(s.cwd) ?? [];
+          ids.push(s.sessionId);
+          byCwd.set(s.cwd, ids);
+        }
+        const items = [...byCwd.entries()].map(([cwd, sessionIds]) => ({
+          workspaceId: `<cwd>:${cwd}`,
+          path: cwd,
+          title: cwd.split(/[\\/]/).pop() ?? cwd,
+          sessionIds
+        }));
+        this.opts.log(`listWorkspaces: no unary workspace.list on this dsh — derived ${items.length} workspace group(s) from session cwds`);
+        return { items, archivedSessionIds: [] };
+      }
+    }
+    return undefined;
   }
 
   /** List all sessions with their cwd and updatedAt (to find a project's session).
@@ -638,6 +838,8 @@ export class DshManager {
         this.opts.log(`start: adopting existing server at ${candidate}`);
         this.external = true;
         this.url = candidate;
+        this.browserAuth = await this.detectBrowserAuth(candidate);
+        this.authCookie = undefined;
         this.everRan = true;
         this.awaitingExternal = false;
         this.autoRestartCount = 0;
@@ -739,7 +941,12 @@ export class DshManager {
       const m = URL_LINE.exec(line);
       if (m !== null) {
         this.url = m[1];
-        this.opts.log(`resolved GUI URL: ${this.url}`);
+        // dsh 0.1.2+ prints a ?token= launch URL and guards the GUI with a
+        // browser-session cookie (the token is exchanged at GET / for a
+        // SameSite=Strict cookie, so a cross-origin webview cannot embed it).
+        this.browserAuth = /[?&]token=/.test(m[1]);
+        this.authCookie = undefined;
+        this.opts.log(`resolved GUI URL: ${this.url}${this.browserAuth ? " (browser-session auth)" : ""}`);
       }
     }
   }
