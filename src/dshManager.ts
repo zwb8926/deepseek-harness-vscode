@@ -18,11 +18,13 @@
  */
 
 import { spawn, ChildProcess } from "node:child_process";
+import { createHash, createHmac } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import { GuiProxy } from "./guiProxy";
 
 // Shared split-panel adapter shipped next to out/ (see panel-inject.js).
 // The injected script reads ?dshPanel=sidebar|center and adapts the GUI.
@@ -50,6 +52,15 @@ export interface DshRuntimeInfo {
   /** True when the served frontend understands ?dshPanel=sidebar|center
    * (split-panel mode). False → the UI falls back to the full GUI. */
   panelSupport?: boolean;
+  /** True when the dsh server guards the GUI with a browser-session cookie
+   * (launch-token exchange at GET /, dsh 0.1.2+). Such a GUI cannot be
+   * embedded in a cross-origin webview iframe, so the UI falls back to
+   * open-in-browser regardless of panelSupport. */
+  browserAuth?: boolean;
+  /** Loopback proxy URL for the webview to embed (dsh 0.1.2+ servers only).
+   * The proxy injects the browser-session cookie server-side, so the SPA
+   * loads normally inside the cross-origin webview. */
+  guiUrl?: string;
   /** Human-readable detail, usually an error message. */
   detail?: string;
   /** The current VS Code project directory resolved at click time. */
@@ -99,6 +110,10 @@ const MAX_AUTO_RESTARTS = 2;
 const WATCH_INTERVAL_MS = 5_000;
 /** Consecutive failed probes before the server is declared dead. */
 const WATCH_FAILURES_TO_DIE = 2;
+/** Back-fill cooldown per session for the session/follow projection read. */
+const TITLE_BACKFILL_COOLDOWN_MS = 60_000;
+/** Max sessions whose missing projection is back-filled per list round. */
+const TITLE_BACKFILL_PER_ROUND = 3;
 
 /**
  * Compare two dsh version strings (semver-ish, e.g. "0.1.0-rc.7").
@@ -150,6 +165,14 @@ export class DshManager {
   private url?: string;
   private external = false;
   private panelSupport?: boolean;
+  private browserAuth = false;
+  private authCookie?: string;
+  private guiProxy?: GuiProxy;
+  /** sessionId → last known title (list projections are not always present;
+   * see fetchSessionTitle). */
+  private titleCache = new Map<string, string>();
+  /** sessionId → last time its missing projection was back-filled. */
+  private titleFetchAt = new Map<string, number>();
   private detail?: string;
   private project?: string;
   private disposed = false;
@@ -188,6 +211,8 @@ export class DshManager {
       url: this.url,
       external: this.external,
       panelSupport: this.panelSupport,
+      browserAuth: this.browserAuth,
+      guiUrl: this.guiProxy?.url,
       detail: this.detail,
       project: this.project
     };
@@ -210,19 +235,35 @@ export class DshManager {
   }
 
   /** Probe one URL with a short timeout. Returns the response status text, or
-   * undefined when the server is unreachable. */
-  private probe(url: string, timeoutMs = 2_500): Promise<number | undefined> {
+   * undefined when the server is unreachable. Follows the browser-session
+   * cookie flow when the server requires it. */
+  private async probe(url: string, timeoutMs = 2_500): Promise<number | undefined> {
+    const r = await this.authedGet(url, "/", timeoutMs);
+    return r?.status;
+  }
+
+  /** One plain HTTP GET (no redirect following). Captures the status, the
+   * (small) body, and the session cookie minted by a token exchange. */
+  private httpGetOnce(
+    target: string,
+    headers: http.OutgoingHttpHeaders = {},
+    timeoutMs = 4_000
+  ): Promise<{ status: number; body: string; setCookie?: string } | undefined> {
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (value: number | undefined): void => {
+      const finish = (value: { status: number; body: string; setCookie?: string } | undefined): void => {
         if (!settled) {
           settled = true;
           resolve(value);
         }
       };
-      const req = http.get(url, { timeout: timeoutMs }, (res) => {
-        finish(res.statusCode);
-        res.resume();
+      const req = http.get(target, { headers, timeout: timeoutMs }, (res) => {
+        let body = "";
+        res.on("data", (chunk: Buffer) => (body += chunk.toString("utf8")));
+        res.on("end", () => {
+          const sc = res.headers["set-cookie"];
+          finish({ status: res.statusCode ?? 0, body, setCookie: Array.isArray(sc) ? sc[0] : sc });
+        });
       });
       req.on("timeout", () => {
         finish(undefined);
@@ -232,40 +273,173 @@ export class DshManager {
     });
   }
 
-  private async fetchRoot(url: string): Promise<string | undefined> {
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value: string | undefined): void => {
-        if (!settled) {
-          settled = true;
-          resolve(value);
-        }
-      };
-      const req = http.get(url, { timeout: 3_000 }, (res) => {
-        if (res.statusCode !== 200) {
-          finish(undefined);
-          res.resume();
-          return;
-        }
-        let body = "";
-        res.on("data", (chunk: Buffer) => {
-          body += chunk.toString("utf8");
-          if (body.length > 200_000) req.destroy();
-        });
-        res.on("end", () => finish(body));
-      });
-      req.on("timeout", () => {
-        finish(undefined);
-        req.destroy();
-      });
-      req.on("error", () => finish(undefined));
-    });
+  /** GET one path on the GUI origin, transparently following the dsh
+   * browser-session auth flow when the server uses it (dsh 0.1.2+):
+   * `GET /?token=…` mints an authority-bound cookie; the request is then
+   * repeated with it. Older servers answer the bare root directly. */
+  private async authedGet(url: string, pathQuery = "/", timeoutMs = 4_000): Promise<{ status: number; body: string } | undefined> {
+    let u: URL | undefined;
+    try {
+      u = new URL(url);
+    } catch {
+      return undefined;
+    }
+    const plain = await this.httpGetOnce(u.origin + pathQuery, {}, timeoutMs);
+    if (plain !== undefined && plain.status === 200) return { status: plain.status, body: plain.body };
+    if (plain === undefined) return undefined;
+    const cookie = await this.ensureAuthCookie(u);
+    if (cookie === undefined) return undefined;
+    const authed = await this.httpGetOnce(u.origin + pathQuery, { Cookie: cookie }, timeoutMs);
+    if (authed !== undefined && authed.status === 200) return { status: authed.status, body: authed.body };
+    if (authed !== undefined && authed.status === 401) {
+      // Stale cookie — mint once more and retry.
+      this.authCookie = undefined;
+      const fresh = await this.ensureAuthCookie(u);
+      if (fresh === undefined) return undefined;
+      const retried = await this.httpGetOnce(u.origin + pathQuery, { Cookie: fresh }, timeoutMs);
+      return retried === undefined ? undefined : { status: retried.status, body: retried.body };
+    }
+    return authed === undefined ? undefined : { status: authed.status, body: authed.body };
   }
 
   /** Whether the URL answers with the dsh SPA (contains the boot manifest). */
   private async isDshServer(url: string): Promise<boolean> {
-    const body = await this.fetchRoot(url);
-    return body !== undefined && body.includes("__DSH_BOOT__");
+    const r = await this.authedGet(url, "/");
+    return r !== undefined && r.status === 200 && r.body.includes("__DSH_BOOT__");
+  }
+
+  // ----------------------------------------------------------- browser auth
+
+  /** True when the dsh server guards the GUI with the browser-session cookie
+   * flow rather than serving the root directly. */
+  private async detectBrowserAuth(url: string): Promise<boolean> {
+    let u: URL | undefined;
+    try {
+      u = new URL(url);
+    } catch {
+      return false;
+    }
+    if (u.searchParams.get("token") !== null) return true;
+    const plain = await this.httpGetOnce(u.origin + "/");
+    return plain !== undefined && (plain.status === 401 || plain.status === 303);
+  }
+
+  /** Exchange the process launch token (?token= in the printed URL) for the
+   * browser-session cookie; undefined when there is no token flow. */
+  private async mintAuthCookie(u: URL): Promise<string | undefined> {
+    const token = u.searchParams.get("token");
+    if (token === undefined || token === null || token === "") return undefined;
+    const res = await this.httpGetOnce(`${u.origin}/?token=${encodeURIComponent(token)}`);
+    const cookie = res?.setCookie?.split(";")[0]?.trim();
+    return cookie !== undefined && cookie !== "" ? cookie : undefined;
+  }
+
+  /**
+   * Forge a browser-session cookie from `$DSH_HOME/.credentials.yaml`.
+   *
+   * Adopted servers (e.g. an `npx dsh web` already running on the port) share
+   * the DSH_HOME — and therefore the owner-scoped signing secret — but never
+   * reveal their launch token. The dsh-client-connection cookie format is
+   * `v1.<base64url(json payload)>.<base64url(hmac-sha256(secret, body))>` with
+   * the name `dsh-auth-<base64url(sha256(authority))>`; we mirror it so every
+   * RPC and health check authenticates without the token.
+   */
+  private async forgeAuthCookie(u: URL): Promise<string | undefined> {
+    const secret = await this.readBrowserSessionSecret();
+    if (secret === undefined) return undefined;
+    const key = Buffer.from(secret.replaceAll("-", "+").replaceAll("_", "/"), "base64");
+    if (key.byteLength !== 32) return undefined;
+    const b64u = (buf: Buffer): string => buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+    const authority = u.host;
+    const name = "dsh-auth-" + b64u(createHash("sha256").update(authority).digest());
+    const issuedAt = Date.now();
+    const expiresAt = issuedAt + 30 * 24 * 3600_000;
+    const body = b64u(Buffer.from(JSON.stringify({ version: 1, authority, issuedAt, expiresAt }), "utf8"));
+    const sig = b64u(createHmac("sha256", key).update(body).digest());
+    return `${name}=v1.${body}.${sig}`;
+  }
+
+  /** The owner-scoped browser-session secret from the DSH_HOME credentials
+   * store (best effort — the file format is tiny and stable). */
+  private readBrowserSessionSecret(): string | undefined {
+    const envHome = process.env.DSH_HOME?.trim();
+    const home =
+      this.opts.home !== undefined && this.opts.home.trim() !== ""
+        ? this.opts.home
+        : envHome !== undefined && envHome !== ""
+          ? envHome
+          : path.join(os.homedir(), ".dsh");
+    const file = path.join(home, ".credentials.yaml");
+    let text: string | undefined;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      return undefined;
+    }
+    let inSection = false;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      const topLevel = raw.length > 0 && raw[0] !== " " && raw[0] !== "\t" && line.includes(":");
+      if (!inSection) {
+        if (line.startsWith("client-connection/browser-session:")) inSection = true;
+        continue;
+      }
+      if (topLevel) return undefined; // left the record subtree
+      if (line.startsWith("secret:")) return line.slice("secret:".length).trim();
+    }
+    return undefined;
+  }
+
+  /** Get a browser-session cookie for one server: prefer the launch-token
+   * exchange (own process), fall back to forging from the credentials record
+   * (adopted server on the same DSH_HOME). */
+  private async ensureAuthCookie(u: URL): Promise<string | undefined> {
+    if (this.authCookie !== undefined) return this.authCookie;
+    const cookie = (await this.mintAuthCookie(u)) ?? (await this.forgeAuthCookie(u));
+    if (cookie !== undefined) this.authCookie = cookie;
+    return cookie;
+  }
+
+  // -------------------------------------------------------------- GUI proxy
+
+  /** Parse the current GUI URL, or undefined. */
+  private parsedUrl(): URL | undefined {
+    try {
+      return this.url === undefined ? undefined : new URL(this.url);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Start the webview-friendly loopback proxy for a browser-session-auth
+   * server. The SameSite=Strict cookie cannot pass through a cross-origin
+   * webview iframe, but the proxy (extension host side) injects it into every
+   * forwarded request, so the embedded SPA authenticates as a normal browser.
+   */
+  private async startGuiProxy(): Promise<void> {
+    void this.guiProxy?.stop();
+    this.guiProxy = undefined;
+    const u = this.parsedUrl();
+    if (u === undefined) return;
+    const port = Number(u.port);
+    if (!Number.isFinite(port) || port === 0) return;
+    // The cookie is re-resolved per request: an expired/missing session gets
+    // re-minted (or re-forged) without a proxy restart.
+    const proxy = new GuiProxy(port, () => this.ensureAuthCookie(this.parsedUrl() ?? u));
+    try {
+      await proxy.start();
+      this.guiProxy = proxy;
+      this.opts.log(`gui proxy: webview URL ${proxy.url}`);
+    } catch (err) {
+      this.opts.log(`gui proxy: failed to start (${String(err)}) — webview falls back to open-in-browser`);
+    }
+  }
+
+  private stopGuiProxy(): void {
+    const proxy = this.guiProxy;
+    this.guiProxy = undefined;
+    if (proxy !== undefined) void proxy.stop();
   }
 
   // ------------------------------------------------------- split-panel mode
@@ -280,10 +454,10 @@ export class DshManager {
    */
   private async ensurePanelSupport(url: string): Promise<boolean> {
     try {
-      const probe = url + "/?dshPanel=sidebar";
-      const body = await this.fetchRoot(probe);
-      if (body !== undefined && body.includes(PANEL_MARKER)) {
-        if (!body.includes(PANEL_INJECT)) {
+      const probe = "/?dshPanel=sidebar";
+      const body = await this.authedGet(url, probe);
+      if (body !== undefined && body.status === 200 && body.body.includes(PANEL_MARKER)) {
+        if (!body.body.includes(PANEL_INJECT)) {
           // Split view works, but the served adapter predates the
           // session-click coordination — best-effort upgrade of the frontend
           // files on disk (the server re-reads index.html per request, so a
@@ -302,8 +476,8 @@ export class DshManager {
         if (patchFrontendIndexFile(file, (line) => this.opts.log(line))) patchedAny = true;
       }
       if (patchedAny) {
-        const again = await this.fetchRoot(probe);
-        if (again !== undefined && again.includes(PANEL_MARKER)) {
+        const again = await this.authedGet(url, probe);
+        if (again !== undefined && again.status === 200 && again.body.includes(PANEL_MARKER)) {
           this.opts.log("panel: frontend patched — split panels enabled");
           return true;
         }
@@ -351,26 +525,80 @@ export class DshManager {
     return files;
   }
 
+  /**
+   * Translate one internal RPC call to the server's actual wire form.
+   *
+   * Pre-0.1.2 servers speak dotted endpoints with a raw field payload
+   * (`session.create` + `{cwd}`). dsh 0.1.2+ (browser-session auth servers,
+   * detected via `browserAuth`) moved to typert's `namespace/method`
+   * endpoints and a `{args: {...}}` envelope with descriptor-named wires
+   * (`session/create` + `{request: {cwd}}`). One notable casualty: the
+   * workspace LIST is no longer a unary RPC (it rides the `workspace/follow`
+   * stream), so callers of `workspace.list` must degrade.
+   */
+  private rpcRequest(method: string, payload: unknown): { endpoint: string; args: Record<string, unknown>; unsupported?: boolean } | undefined {
+    if (!this.browserAuth) return { endpoint: method, args: (payload ?? {}) as Record<string, unknown> };
+    const dotAt = method.indexOf(".");
+    if (dotAt === -1) return { endpoint: method, args: (payload ?? {}) as Record<string, unknown> };
+    const endpoint = method.slice(0, dotAt) + "/" + method.slice(dotAt + 1);
+    if (endpoint === "workspace/list") return { endpoint, args: {}, unsupported: true };
+    const fields = (payload ?? {}) as Record<string, unknown>;
+    switch (endpoint) {
+      // Listers and settings carried their wire names across; everything else
+      // now expects a single `request` field.
+      case "session/list":
+        return { endpoint, args: { _request: {} } };
+      case "session/search":
+      case "session/create":
+      case "session/rename":
+      case "session/fork":
+      case "workspace/create":
+      case "workspace/rename":
+      case "workspace/delete":
+      case "workspace/archiveSession":
+        return { endpoint, args: { request: fields } };
+      default:
+        return { endpoint, args: fields };
+    }
+  }
+
   /** POST one /api RPC envelope; returns the parsed response value or undefined. */
   private async rpc(method: string, payload: unknown): Promise<unknown | undefined> {
-    const url = this.url;
-    if (url === undefined || this.state !== "running") return undefined;
+    if (this.url === undefined || this.state !== "running") return undefined;
+    let u: URL;
+    try {
+      u = new URL(this.url);
+    } catch {
+      return undefined;
+    }
+    const wire = this.rpcRequest(method, payload);
+    if (wire === undefined) return undefined;
+    if (wire.unsupported === true) {
+      this.opts.log(`rpc ${method}: not available on this dsh wire version`);
+      return undefined;
+    }
     const envelope = {
       type: "client-request",
       rpcId: `dsh-vsc-${Date.now()}`,
-      method,
-      payload
+      method: wire.endpoint,
+      // typert wire (0.1.2+): payload = {args: <descriptor fields>}; older
+      // servers take the raw field object.
+      payload: this.browserAuth ? { args: wire.args } : wire.args
     };
+    const body = JSON.stringify(envelope);
+    // Browser-session auth (dsh 0.1.2+): every /api call needs the cookie.
+    const cookie = await this.ensureAuthCookie(u);
+    const headers: http.OutgoingHttpHeaders = {
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(body)
+    };
+    if (cookie !== undefined) headers.Cookie = cookie;
     return new Promise((resolve) => {
-      const body = JSON.stringify(envelope);
       const req = http.request(
-        new URL(`${url}/api/${method}`),
+        new URL(`${u.origin}/api/${wire.endpoint}`),
         {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "content-length": Buffer.byteLength(body)
-          },
+          headers,
           timeout: 15_000
         },
         (res) => {
@@ -383,7 +611,7 @@ export class DshManager {
               };
               if (parsed.result?.ok === true) resolve(parsed.result.value);
               else {
-                this.opts.log(`rpc ${method} failed: ${parsed.result?.error?.message ?? text.slice(0, 200)}`);
+                this.opts.log(`rpc ${wire.endpoint} failed: ${parsed.result?.error?.message ?? text.slice(0, 200)}`);
                 resolve(undefined);
               }
             } catch {
@@ -393,12 +621,12 @@ export class DshManager {
         }
       );
       req.on("timeout", () => {
-        this.opts.log(`rpc ${method} timed out`);
+        this.opts.log(`rpc ${wire.endpoint} timed out`);
         req.destroy();
         resolve(undefined);
       });
       req.on("error", (err) => {
-        this.opts.log(`rpc ${method} error: ${String(err)}`);
+        this.opts.log(`rpc ${wire.endpoint} error: ${String(err)}`);
         resolve(undefined);
       });
       req.end(body);
@@ -522,11 +750,96 @@ export class DshManager {
           archivedSessionIds?: string[];
         }
       | undefined;
-    if (value === undefined) return undefined;
-    return {
-      items: value.items ?? [],
-      archivedSessionIds: value.archivedSessionIds ?? []
-    };
+    if (value !== undefined) {
+      return {
+        items: value.items ?? [],
+        archivedSessionIds: value.archivedSessionIds ?? []
+      };
+    }
+    // dsh 0.1.2+ dropped the unary workspace LIST; the real state (workspaces
+    // plus the archive set) rides the `workspace/follow` stream. Subscribe
+    // once and take the baseline frame.
+    if (this.browserAuth) {
+      const snapshot = await this.workspaceBaseline();
+      if (snapshot !== undefined) {
+        this.opts.log(`listWorkspaces: workspace/follow snapshot — ${snapshot.items.length} workspace(s), ${snapshot.archivedSessionIds.length} archived`);
+        return snapshot;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * One-shot subscription to the dsh 0.1.2+ `workspace/follow` stream.
+   * Returns the baseline frame (workspaces + archive set), or undefined.
+   */
+  private async workspaceBaseline(): Promise<
+    | {
+        items: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
+        archivedSessionIds: string[];
+      }
+    | undefined
+  > {
+    const u = this.parsedUrl();
+    if (u === undefined) return undefined;
+    const cookie = await this.ensureAuthCookie(u);
+    if (cookie === undefined) return undefined;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const WebSocket: any = require("ws");
+    return await new Promise((resolve) => {
+      let settled = false;
+      let ws: any;
+      const finish = (value: { items: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>; archivedSessionIds: string[] } | undefined): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          ws?.close();
+        } catch {
+          /* already closed */
+        }
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(undefined), 10_000);
+      try {
+        ws = new WebSocket(`ws://${u.host}/api/remote.mux`, { headers: { Cookie: cookie } });
+      } catch {
+        finish(undefined);
+        return;
+      }
+      ws.on("open", () => {
+        ws.send(JSON.stringify({ type: "open", streamId: `dsh-vsc-${Date.now()}`, endpoint: "workspace/follow", payload: { args: {} } }));
+      });
+      ws.on("message", (data: unknown) => {
+        let msg: any;
+        try {
+          msg = JSON.parse(String(data));
+        } catch {
+          return;
+        }
+        if (msg?.type === "item" && msg.value?.type === "baseline" && msg.value.value !== undefined) {
+          const value = msg.value.value;
+          const items = Array.isArray(value.items)
+            ? value.items
+                .filter((w: any) => typeof w?.workspaceId === "string")
+                .map((w: any) => ({
+                  workspaceId: String(w.workspaceId),
+                  path: typeof w.path === "string" ? w.path : "",
+                  title: typeof w.title === "string" ? w.title : "",
+                  sessionIds: Array.isArray(w.sessionIds) ? w.sessionIds.map(String) : []
+                }))
+            : [];
+          finish({
+            items,
+            archivedSessionIds: Array.isArray(value.archivedSessionIds) ? value.archivedSessionIds.map(String) : []
+          });
+        } else if (msg?.type === "end" || msg?.type === "error") {
+          finish(undefined);
+        }
+      });
+      ws.on("error", () => finish(undefined));
+      ws.on("close", () => finish(undefined));
+    });
   }
 
   /** List all sessions with their cwd and updatedAt (to find a project's session).
@@ -556,16 +869,115 @@ export class DshManager {
           }>;
         }
       | undefined;
-    return value?.items?.map((it) => ({
-      sessionId: it.sessionId,
-      updatedAt: it.updatedAt,
-      cwd: it.cwd,
-      running: it.running,
-      blank: it.blank,
-      title: it.projections?.values?.title,
-      turns: it.projections?.values?.sessionStats?.turns,
-      steps: it.projections?.values?.sessionStats?.steps
-    }));
+    // On dsh 0.1.2+ the session title lives in the (cached) projections. A few
+    // migrated/legacy sessions occasionally lack them on list; those are
+    // back-filled via a one-shot session/follow read (which also completes the
+    // server-side projection), so the launcher shows real titles.
+    const missing: string[] = [];
+    const sessions = (value?.items ?? []).map((it) => {
+      let title = it.projections?.values?.title;
+      if (title !== undefined && title !== "") {
+        this.titleCache.set(it.sessionId, title);
+      } else {
+        title = this.titleCache.get(it.sessionId);
+        if (title === undefined) missing.push(it.sessionId);
+      }
+      return {
+        sessionId: it.sessionId,
+        updatedAt: it.updatedAt,
+        cwd: it.cwd,
+        running: it.running,
+        blank: it.blank,
+        title,
+        turns: it.projections?.values?.sessionStats?.turns,
+        steps: it.projections?.values?.sessionStats?.steps
+      };
+    });
+    if (this.browserAuth && missing.length > 0) void this.backfillSessionTitles(missing);
+    return sessions;
+  }
+
+  /**
+   * Lazily complete the missing session projections (titles) for a few
+   * sessions per round: subscribing to the alpha.2 `session/follow` stream
+   * returns a snapshot whose `projections.values.title` is the durable title
+   * and also makes the server back-fill the projection, so the next plain
+   * `session.list` carries it too.
+   */
+  private async backfillSessionTitles(ids: string[]): Promise<void> {
+    const now = Date.now();
+    const todo = ids
+      .filter((id) => now - (this.titleFetchAt.get(id) ?? 0) >= TITLE_BACKFILL_COOLDOWN_MS)
+      .slice(0, TITLE_BACKFILL_PER_ROUND);
+    if (todo.length === 0) return;
+    await Promise.all(
+      todo.map(async (id) => {
+        this.titleFetchAt.set(id, now);
+        const title = await this.fetchSessionTitle(id);
+        if (title !== undefined && title !== "") {
+          this.titleCache.set(id, title);
+          this.opts.log(`session title back-fill: ${id.slice(0, 24)}… → "${title}"`);
+        }
+      })
+    );
+  }
+
+  /** Read one session's snapshot projections over the mux stream. */
+  private async fetchSessionTitle(sessionId: string): Promise<string | undefined> {
+    const u = this.parsedUrl();
+    if (u === undefined) return undefined;
+    const cookie = await this.ensureAuthCookie(u);
+    if (cookie === undefined) return undefined;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const WebSocket: any = require("ws");
+    return await new Promise((resolve) => {
+      let settled = false;
+      let ws: any;
+      const finish = (value: string | undefined): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try {
+          ws?.close();
+        } catch {
+          /* already closed */
+        }
+        resolve(value);
+      };
+      const timer = setTimeout(() => finish(undefined), 8_000);
+      try {
+        ws = new WebSocket(`ws://${u.host}/api/remote.mux`, { headers: { Cookie: cookie } });
+      } catch {
+        finish(undefined);
+        return;
+      }
+      ws.on("open", () => {
+        ws.send(
+          JSON.stringify({
+            type: "open",
+            streamId: `dsh-title-${Date.now()}`,
+            endpoint: "session/follow",
+            payload: { args: { request: { address: { kind: "session", sessionId } } } }
+          })
+        );
+      });
+      ws.on("message", (data: unknown) => {
+        let msg: any;
+        try {
+          msg = JSON.parse(String(data));
+        } catch {
+          return;
+        }
+        if (msg?.type === "item" && msg.value?.type === "snapshot" && msg.value.projections?.values !== undefined) {
+          const title = msg.value.projections.values.title;
+          finish(typeof title === "string" && title !== "" ? title : undefined);
+        } else if (msg?.type === "error" || msg?.type === "end") {
+          finish(undefined);
+        }
+      });
+      ws.on("error", () => finish(undefined));
+      ws.on("close", () => finish(undefined));
+    });
   }
 
   /** Search sessions (launcher search box). Tries the harness content search;
@@ -638,9 +1050,12 @@ export class DshManager {
         this.opts.log(`start: adopting existing server at ${candidate}`);
         this.external = true;
         this.url = candidate;
+        this.browserAuth = await this.detectBrowserAuth(candidate);
+        this.authCookie = undefined;
         this.everRan = true;
         this.awaitingExternal = false;
         this.autoRestartCount = 0;
+        if (this.browserAuth) await this.startGuiProxy();
         this.panelSupport = await this.ensurePanelSupport(candidate);
         this.setState("running");
         return;
@@ -739,7 +1154,12 @@ export class DshManager {
       const m = URL_LINE.exec(line);
       if (m !== null) {
         this.url = m[1];
-        this.opts.log(`resolved GUI URL: ${this.url}`);
+        // dsh 0.1.2+ prints a ?token= launch URL and guards the GUI with a
+        // browser-session cookie (the token is exchanged at GET / for a
+        // SameSite=Strict cookie, so a cross-origin webview cannot embed it).
+        this.browserAuth = /[?&]token=/.test(m[1]);
+        this.authCookie = undefined;
+        this.opts.log(`resolved GUI URL: ${this.url}${this.browserAuth ? " (browser-session auth)" : ""}`);
       }
     }
   }
@@ -771,6 +1191,7 @@ export class DshManager {
         const ok = await this.isDshServer(url);
         if (ok) {
           this.autoRestartCount = 0;
+          if (this.browserAuth) await this.startGuiProxy();
           this.panelSupport = await this.ensurePanelSupport(url);
           this.setState("running");
           return;
@@ -789,6 +1210,7 @@ export class DshManager {
   private killChild(child: ChildProcess): void {
     if (this.child !== child) return;
     this.child = undefined;
+    this.stopGuiProxy();
     this.opts.log("killing dsh process after failed start");
     try {
       child.kill();
@@ -901,6 +1323,7 @@ export class DshManager {
 
   async stop(): Promise<void> {
     this.awaitingExternal = false;
+    this.stopGuiProxy();
     if (this.restartTimer !== undefined) {
       clearTimeout(this.restartTimer);
       this.restartTimer = undefined;
@@ -1122,6 +1545,7 @@ export class DshManager {
   dispose(): void {
     this.disposed = true;
     this.awaitingExternal = false;
+    this.stopGuiProxy();
     if (this.watchTimer !== undefined) {
       clearInterval(this.watchTimer);
       this.watchTimer = undefined;
