@@ -9,18 +9,34 @@
 // three-column grid with CSS only:
 //
 //   - sidebar: keep only the sidebar column and force the frame to the wide
-//     breakpoint (SIDEBAR_AUTO_COLLAPSE = 1024px) so the sidebar renders
-//     expanded instead of collapsing to the 56px rail in a narrow viewport.
-//     The sidebar's own collapse/expand toggle (the rail chevron at the top
-//     right) is hidden — the launcher is always expanded.
+//     breakpoint (the GUI auto-collapses below 1024px — SIDEBAR_AUTO_COLLAPSE)
+//     so the sidebar renders expanded instead of collapsing to the 56px rail
+//     in a narrow viewport. The rail expand/collapse control is hidden — the
+//     launcher is always expanded.
 //   - center: drop the sidebar column (and its drag handle) and let the
 //     conversation span tracks 1-2; the details column keeps its live width
 //     on track 3. The sidebar column is kept in the DOM (off-screen, hidden,
-//     inert) because the settings modal lives inside it; its overlay is
-//     re-enabled so the modal covers the editor tab.
+//     inert) because the settings trigger AND its modal live inside it
+//     (rc.1: ui-settings registers into the sidebar foot seat); its overlay
+//     is re-enabled so the modal covers the editor tab.
+//
+// Frontend versions. The adapter was written against the 0.1.2-alpha.2 DOM
+// and still matches 0.1.2-rc.1: the AppFrame source is unchanged between the
+// two releases (three-column grid with inline `grid-template-columns`, drag
+// handles with `data-side`, column CSS-module locals sidebarCol/centerCol/
+// detailsCol/frame/handle/overlay). CSS-module class names are minified to a
+// `<hash>_<local>` token (e.g. `pI_x6G_centerCol`), so every rule matches on
+// the stable `_<local>` SUFFIX / substring rather than a full class name.
+// rc.1 ships each UI plugin as its own runtime bundle that injects its
+// stylesheet via a `<style data-plugin-css>` tag (they are NOT in the shell
+// assets — searching only `assets/index-*.js` for `sidebarCol` etc. finds
+// nothing and is the wrong place to look). The layout classes exist only
+// once the plugin bundle runs, so this script applies its rules with
+// !important and lets React mount underneath them.
 //
 // The current session selection is client-local (persisted under
-// `dsh.sessions.current`, no cross-tab live sync), so:
+// `dsh.sessions.current` by the session-controller snapshot store — rc.1
+// keeps the same key, so the coordination below is unchanged), so:
 //
 //   - the center panel listens for `storage` events and reloads itself when
 //     the selection changes in another same-origin context (the launcher).
@@ -133,14 +149,19 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   document.head.appendChild(style);
   if (panel !== 'sidebar' && panel !== 'center') return;
   document.documentElement.setAttribute('data-dsh-panel', panel);
+  // The AppFrame grid owns the three columns. Other rc.1 UI modules reuse the
+  // CSS-module local name "_frame" (attachment/chat/subagent/user-questions
+  // frames), so the frame-anchored rules below scope to the LAYOUT frame —
+  // the one whose direct children include the sidebar column.
+  var frameSel = '[class$="_frame"]:has(> [class*="sidebarCol"])';
   var panelStyle = document.createElement('style');
   panelStyle.textContent =
     'html[data-dsh-panel="sidebar"] [class*="centerCol"],' +
     'html[data-dsh-panel="sidebar"] [class*="detailsCol"],' +
-    'html[data-dsh-panel="sidebar"] [class$="_frame"] > [class$="_handle"],' +
+    'html[data-dsh-panel="sidebar"] [class$="_handle"],' +
     'html[data-dsh-panel="sidebar"] button:has([class$="_railMark"])' +
       ' { display: none !important; }' +
-    'html[data-dsh-panel="sidebar"] [class$="_frame"] { min-width: 1024px !important; }' +
+    'html[data-dsh-panel="sidebar"] ' + frameSel + ' { min-width: 1024px !important; }' +
     'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }' +
     // The settings modal lives INSIDE the off-screen sidebar column. The
     // column's position:fixed creates its own stacking context (z-index:
@@ -177,7 +198,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     'html[data-dsh-panel="center"] [role="menu"],' +
     'html[data-dsh-panel="center"] [role="listbox"]' +
       ' { z-index: 1 !important; }' +
-    'html[data-dsh-panel="center"] [class$="_frame"] > [class$="_handle"][data-side="sidebar"]' +
+    'html[data-dsh-panel="center"] ' + frameSel + ' > [class$="_handle"][data-side="sidebar"]' +
       ' { display: none !important; }' +
     'html[data-dsh-panel="center"] [class*="centerCol"] { grid-column: 1 / 3 !important; }';
   document.head.appendChild(panelStyle);
