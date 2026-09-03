@@ -13,12 +13,11 @@
 //     so the sidebar renders expanded instead of collapsing to the 56px rail
 //     in a narrow viewport. The rail expand/collapse control is hidden — the
 //     launcher is always expanded.
-//   - center: drop the sidebar column (and its drag handle) and let the
-//     conversation span tracks 1-2; the details column keeps its live width
-//     on track 3. The sidebar column is kept in the DOM (off-screen, hidden,
-//     inert) because the settings trigger AND its modal live inside it
-//     (rc.1: ui-settings registers into the sidebar foot seat); its overlay
-//     is re-enabled so the modal covers the editor tab.
+//   - center: render the GUI as-is (full interactive layout). Hiding the
+//     sidebar column made rc.1's settings modal inert (the modal lives in the
+//     sidebar subtree, which the off-screen column also made
+//     `pointer-events:none`), so the editor tab keeps the whole GUI: sessions
+//     sidebar, its toggle, and a fully clickable settings dialog.
 //
 // Frontend versions. The adapter was written against the 0.1.2-alpha.2 DOM
 // and still matches 0.1.2-rc.1: the AppFrame source is unchanged between the
@@ -162,45 +161,7 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     'html[data-dsh-panel="sidebar"] button:has([class$="_railMark"])' +
       ' { display: none !important; }' +
     'html[data-dsh-panel="sidebar"] ' + frameSel + ' { min-width: 1024px !important; }' +
-    'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }' +
-    // The settings modal lives INSIDE the off-screen sidebar column. The
-    // column's position:fixed creates its own stacking context (z-index:
-    // auto — treated as 0 at the body level), so the always-on
-    // role rules (presentation 1000 / dialog 2000) only order things
-    // INSIDE that subtree: the settings panel loses to any body-level
-    // layer the editor column paints (composer z:1, conversation panel
-    // z:100, message-feedback note z:1100), i.e. the settings modal is
-    // covered by the chat UI in the editor tab. Fix: lift the off-screen
-    // sidebar column itself above the editor content (z-index 1500 —
-    // above everything the center column paints, below the dialog layer
-    // at 2000, so delete confirmations still cover the settings panel).
-    'html[data-dsh-panel="center"] [class*="sidebarCol"] {' +
-      ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
-      ' width: 300px !important; height: 100% !important;' +
-      ' overflow: visible !important;' +
-      ' visibility: hidden !important; pointer-events: none !important;' +
-      ' z-index: 1500 !important; }' +
-    'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
-      ' position: fixed !important; inset: 0 !important;' +
-      ' visibility: visible !important; pointer-events: auto !important; }' +
-    // Settings popovers are React portals into the body, so they live in the
-    // body's stacking context. The off-screen sidebar subtree (parent of the
-    // settings panel) also competes at the body level via its z-index bump.
-    // The popover's own z-index is 1100; without this rule the rows inside
-    // the off-screen panel paint over the popover because the panel itself
-    // creates a stacking context (z-index:1, position:relative) that is
-    // taller than the sidebar's own z-index. Pin the popover to z-index:1
-    // to match the panel — the always-on rules above already cover the
-    // settings overlay and Modal; the menu/listbox popovers here get the
-    // same treatment.
-    // (The Modal-root [role="dialog"] rule is already injected above as
-    // always-on; the menu/listbox rules below were the original set.)
-    'html[data-dsh-panel="center"] [role="menu"],' +
-    'html[data-dsh-panel="center"] [role="listbox"]' +
-      ' { z-index: 1 !important; }' +
-    'html[data-dsh-panel="center"] ' + frameSel + ' > [class$="_handle"][data-side="sidebar"]' +
-      ' { display: none !important; }' +
-    'html[data-dsh-panel="center"] [class*="centerCol"] { grid-column: 1 / 3 !important; }';
+    'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }';
   document.head.appendChild(panelStyle);
   var settingsKey = 'dsh.vscode.panel.settings';
   var settingsTrigger = '[class$="_settingsArea"] button[aria-haspopup="dialog"]';
