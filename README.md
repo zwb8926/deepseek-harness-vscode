@@ -8,6 +8,8 @@
 
 本次更新（适配 `@deepseek-ai/dsh@0.1.2-rc.1`，版本 2026.9.4）：
 
+- [@sinply](https://github.com/sinply)     PR [#18](https://github.com/zwb8926/deepseek-harness-vscode/pull/18)
+
 - **内嵌 dsh 升级到 `@deepseek-ai/dsh@0.1.2-rc.1`**（依赖树与前端拆分补丁随包重建）
 - **浏览器会话鉴权与本地 GUI 代理**：rc.1 与 alpha.2 相同，`GET /?token=…` 交换 SameSite=Strict Cookie；跨源 webview iframe 无法携带该 Cookie，扩展在本机随机端口起反向代理注入 Cookie 并转发 HTTP 与 WebSocket（`/api/remote.mux`），完整 GUI（拆分面板、会话/工作区列表、实时流）仍可嵌入 VS Code；代理启动失败才回退「在浏览器打开」
 - **拆分面板适配 rc.1 前端**：rc.1 的 AppFrame 三栏结构与 0.1.2-alpha.2 相同（内联 `grid-template-columns` 网格、带 `data-side` 的拖拽手柄、CSS-module 类名按 `<hash>_<local>` 生成，`frame/sidebarCol/centerCol/detailsCol/handle/overlay` 等稳定后缀仍在，只是它们由**运行时插件 bundle 注入的 `<style data-plugin-css>`** 提供、不在 shell 静态资源里）。panel-inject 的 CSS 改用「后缀/子串 + `:has()` 定位 AppFrame」的选择器，`?dshPanel=sidebar|center` 在 rc.1 上生效；设置弹窗（rc.1 仍挂载在侧栏脚部 `sidebar.settings`）与 `dsh.sessions.current` 会话恢复逻辑与 rc.1 保持兼容
