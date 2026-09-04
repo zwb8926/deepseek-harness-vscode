@@ -114,6 +114,9 @@ const WATCH_FAILURES_TO_DIE = 2;
 const TITLE_BACKFILL_COOLDOWN_MS = 60_000;
 /** Max sessions whose missing projection is back-filled per list round. */
 const TITLE_BACKFILL_PER_ROUND = 3;
+/** One-shot workspace baseline cache TTL — the launcher refreshes every few
+ * seconds and each uncached call would open/close a mux stream. */
+const WORKSPACE_BASELINE_CACHE_MS = 5_000;
 
 /**
  * Compare two dsh version strings (semver-ish, e.g. "0.1.0-rc.7").
@@ -175,6 +178,19 @@ export class DshManager {
   private titleFetchAt = new Map<string, number>();
   private detail?: string;
   private project?: string;
+  /** Absolute path of the dsh bin.js this manager spawned last (when the CLI
+   * was resolved to a file, not a PATH command) — used to locate the EXACT
+   * frontend dist that server serves (require.resolve from the bin). */
+  private resolvedCliBin?: string;
+  /** Wire capability decided by the first listWorkspaces round on a
+   * browser-session-auth (0.1.2+) server: 'follow' = workspace state rides
+   * the workspace/follow stream (alpha.2 and rc.1), 'unary' = the server
+   * answers a unary workspace/list (future wires). Prevents probing the
+   * absent unary endpoint on every launcher refresh. */
+  private workspaceListMode?: "follow" | "unary";
+  /** Last successful workspace baseline (follow snapshot), cached briefly so
+   * the 4-second launcher refresh does not open a mux stream per tick. */
+  private workspaceCache?: { at: number; items: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>; archivedSessionIds: string[] };
   private disposed = false;
   private stopping = false;
   private autoRestartCount = 0;
@@ -490,24 +506,47 @@ export class DshManager {
     }
   }
 
-  /** Candidate dsh-web-frontend dist index.html files on disk, best effort. */
+  /** Candidate dsh-web-frontend dist index.html files on disk, best effort.
+   * Every npm layout is covered: the hoisted sibling
+   * (`<root>/node_modules/@deepseek-ai/dsh-web-frontend`) AND the nested
+   * dependency layout npm -g produces
+   * (`<root>/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend`).
+   * When the running server was spawned from a known bin.js, the exact dist
+   * is resolved through it (require.resolve, the same algorithm dsh-web-app
+   * uses to choose its frontend). */
   private async findFrontendIndexFiles(): Promise<string[]> {
     const files: string[] = [];
+    const seen = new Set<string>();
     const push = (p: string | undefined): void => {
-      if (p !== undefined && existsSync(p)) files.push(p);
+      if (p !== undefined && !seen.has(p) && existsSync(p)) {
+        seen.add(p);
+        files.push(p);
+      }
+    };
+    // The two npm layouts under one install root ("npm root" level).
+    const pushRoot = (root: string | undefined): void => {
+      if (root === undefined || root === "") return;
+      push(path.join(root, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+      push(path.join(root, "node_modules", "@deepseek-ai", "dsh", "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
     };
     // 1. The extension-bundled install (normally already patched at build time).
-    push(path.join(__dirname, "..", "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+    pushRoot(path.join(__dirname, ".."));
     // 2. The auto-install / auto-update directory in the extension storage.
-    if (this.opts.autoInstallDir !== undefined) {
-      push(path.join(this.opts.autoInstallDir, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+    if (this.opts.autoInstallDir !== undefined) pushRoot(this.opts.autoInstallDir);
+    // 3. The exact dist of the server we spawned (if any).
+    if (this.resolvedCliBin !== undefined) {
+      try {
+        const require = createRequire(this.resolvedCliBin);
+        const pkg = require.resolve("@deepseek-ai/dsh-web-frontend/package.json");
+        push(path.join(path.dirname(pkg), "dist", "index.html"));
+      } catch {
+        /* the CLI tree has no frontend package — leave it to the scans */
+      }
     }
-    // 3. A global npm install.
+    // 4. A global npm install.
     const globalRoot = await npmGlobalRoot();
-    if (globalRoot !== undefined) {
-      push(path.join(globalRoot, "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
-    }
-    // 4. The npm npx cache — the usual home of an adopted `npx dsh web` server.
+    if (globalRoot !== undefined) pushRoot(globalRoot);
+    // 5. The npm npx cache — the usual home of an adopted `npx dsh web` server.
     const npxRoot =
       process.platform === "win32"
         ? path.join(os.homedir(), "AppData", "Local", "npm-cache", "_npx")
@@ -516,7 +555,7 @@ export class DshManager {
       if (existsSync(npxRoot)) {
         for (const entry of readdirSync(npxRoot, { withFileTypes: true })) {
           if (!entry.isDirectory()) continue;
-          push(path.join(npxRoot, entry.name, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"));
+          pushRoot(path.join(npxRoot, entry.name));
         }
       }
     } catch (err) {
@@ -532,16 +571,13 @@ export class DshManager {
    * (`session.create` + `{cwd}`). dsh 0.1.2+ (browser-session auth servers,
    * detected via `browserAuth`) moved to typert's `namespace/method`
    * endpoints and a `{args: {...}}` envelope with descriptor-named wires
-   * (`session/create` + `{request: {cwd}}`). One notable casualty: the
-   * workspace LIST is no longer a unary RPC (it rides the `workspace/follow`
-   * stream), so callers of `workspace.list` must degrade.
+   * (`session/create` + `{request: {cwd}}`).
    */
-  private rpcRequest(method: string, payload: unknown): { endpoint: string; args: Record<string, unknown>; unsupported?: boolean } | undefined {
+  private rpcRequest(method: string, payload: unknown): { endpoint: string; args: Record<string, unknown> } | undefined {
     if (!this.browserAuth) return { endpoint: method, args: (payload ?? {}) as Record<string, unknown> };
     const dotAt = method.indexOf(".");
     if (dotAt === -1) return { endpoint: method, args: (payload ?? {}) as Record<string, unknown> };
     const endpoint = method.slice(0, dotAt) + "/" + method.slice(dotAt + 1);
-    if (endpoint === "workspace/list") return { endpoint, args: {}, unsupported: true };
     const fields = (payload ?? {}) as Record<string, unknown>;
     switch (endpoint) {
       // Listers and settings carried their wire names across; everything else
@@ -573,10 +609,6 @@ export class DshManager {
     }
     const wire = this.rpcRequest(method, payload);
     if (wire === undefined) return undefined;
-    if (wire.unsupported === true) {
-      this.opts.log(`rpc ${method}: not available on this dsh wire version`);
-      return undefined;
-    }
     const envelope = {
       type: "client-request",
       rpcId: `dsh-vsc-${Date.now()}`,
@@ -744,34 +776,154 @@ export class DshManager {
       }
     | undefined
   > {
-    const value = (await this.rpc("workspace.list", {})) as
-      | {
-          items?: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
-          archivedSessionIds?: string[];
-        }
-      | undefined;
-    if (value !== undefined) {
-      return {
-        items: value.items ?? [],
-        archivedSessionIds: value.archivedSessionIds ?? []
-      };
-    }
-    // dsh 0.1.2+ dropped the unary workspace LIST; the real state (workspaces
-    // plus the archive set) rides the `workspace/follow` stream. Subscribe
-    // once and take the baseline frame.
-    if (this.browserAuth) {
-      const snapshot = await this.workspaceBaseline();
-      if (snapshot !== undefined) {
-        this.opts.log(`listWorkspaces: workspace/follow snapshot — ${snapshot.items.length} workspace(s), ${snapshot.archivedSessionIds.length} archived`);
-        return snapshot;
+    // Legacy servers (pre-0.1.2): plain dotted unary RPC.
+    if (!this.browserAuth) {
+      const value = (await this.rpc("workspace.list", {})) as
+        | {
+            items?: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
+            archivedSessionIds?: string[];
+          }
+        | undefined;
+      if (value !== undefined) {
+        return {
+          items: value.items ?? [],
+          archivedSessionIds: value.archivedSessionIds ?? []
+        };
       }
+      return undefined;
     }
-    return undefined;
+    // 0.1.2+ wire. Actual releases so far (0.1.2-alpha.2 … 0.1.2-rc.1) expose
+    // NO unary workspace list: the real state (workspaces plus the archive
+    // set) rides the `workspace/follow` stream baseline, and every mutation
+    // (create/rename/delete/archiveSession/…) is a unary `workspace/*`
+    // Remote call. The first round probes the unary endpoint once (cheap,
+    // future-proof: a server that gains a unary list wins); afterwards the
+    // decided mode is cached so a launcher refresh never re-probes a 404.
+    if (this.workspaceListMode === undefined) {
+      const unary = await this.unaryWorkspaceList();
+      if (unary !== undefined) {
+        this.workspaceListMode = "unary";
+        this.opts.log(`listWorkspaces: ${unary.items.length} workspace(s) via unary workspace/list, ${unary.archivedSessionIds.length} archived`);
+        return unary;
+      }
+      this.workspaceListMode = "follow";
+      this.opts.log("listWorkspaces: no unary workspace/list on this dsh wire — using the workspace/follow baseline");
+    }
+    if (this.workspaceListMode === "unary") {
+      const unary = await this.unaryWorkspaceList();
+      if (unary !== undefined) return unary;
+      // A server that stopped answering the unary endpoint — degrade to the
+      // stream for this round only.
+      const fallback = await this.workspaceBaselineCached();
+      if (fallback !== undefined) {
+        this.opts.log(`listWorkspaces: unary workspace/list failed; workspace/follow snapshot — ${fallback.items.length} workspace(s)`);
+      }
+      return fallback;
+    }
+    const snapshot = await this.workspaceBaselineCached();
+    if (snapshot !== undefined) {
+      this.opts.log(`listWorkspaces: workspace/follow snapshot — ${snapshot.items.length} workspace(s), ${snapshot.archivedSessionIds.length} archived`);
+    }
+    return snapshot;
+  }
+
+  /** POST the unary workspace/list envelope; undefined when the server has no
+   * such method (HTTP 404) or the call failed for another reason. */
+  private async unaryWorkspaceList(): Promise<
+    | {
+        items: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
+        archivedSessionIds: string[];
+      }
+    | undefined
+  > {
+    const u = this.parsedUrl();
+    if (u === undefined || this.state !== "running") return undefined;
+    const cookie = await this.ensureAuthCookie(u);
+    if (cookie === undefined) return undefined;
+    const envelope = {
+      type: "client-request",
+      rpcId: `dsh-vsc-${Date.now()}`,
+      method: "workspace/list",
+      payload: { args: {} }
+    };
+    const body = JSON.stringify(envelope);
+    const headers: http.OutgoingHttpHeaders = {
+      "content-type": "application/json",
+      "content-length": Buffer.byteLength(body),
+      Cookie: cookie
+    };
+    return await new Promise((resolve) => {
+      const req = http.request(
+        new URL(`${u.origin}/api/workspace/list`),
+        { method: "POST", headers, timeout: 6_000 },
+        (res) => {
+          let text = "";
+          res.on("data", (chunk: Buffer) => (text += chunk.toString("utf8")));
+          res.on("end", () => {
+            if (res.statusCode !== 200) {
+              resolve(undefined);
+              return;
+            }
+            try {
+              const parsed = JSON.parse(text) as {
+                result?: { ok?: boolean; value?: { items?: Array<{ workspaceId?: string; path?: string; title?: string; sessionIds?: string[] }>; archivedSessionIds?: string[] } };
+              };
+              if (parsed.result?.ok === true && parsed.result.value !== undefined) {
+                const value = parsed.result.value;
+                resolve({
+                  items: (value.items ?? [])
+                    .filter((w) => typeof w.workspaceId === "string")
+                    .map((w) => ({
+                      workspaceId: String(w.workspaceId),
+                      path: typeof w.path === "string" ? w.path : "",
+                      title: typeof w.title === "string" ? w.title : "",
+                      sessionIds: Array.isArray(w.sessionIds) ? w.sessionIds.map(String) : []
+                    })),
+                  archivedSessionIds: Array.isArray(value.archivedSessionIds) ? value.archivedSessionIds.map(String) : []
+                });
+              } else {
+                resolve(undefined);
+              }
+            } catch {
+              resolve(undefined);
+            }
+          });
+        }
+      );
+      req.on("timeout", () => {
+        req.destroy();
+        resolve(undefined);
+      });
+      req.on("error", () => resolve(undefined));
+      req.end(body);
+    });
+  }
+
+  /** workspaceBaseline with a short result cache: the launcher refreshes every
+   * few seconds, and each uncached call would open and tear down a mux stream. */
+  private async workspaceBaselineCached(): Promise<
+    | {
+        items: Array<{ workspaceId: string; path: string; title: string; sessionIds: string[] }>;
+        archivedSessionIds: string[];
+      }
+    | undefined
+  > {
+    const cache = this.workspaceCache;
+    if (cache !== undefined && Date.now() - cache.at < WORKSPACE_BASELINE_CACHE_MS) {
+      return { items: cache.items, archivedSessionIds: cache.archivedSessionIds };
+    }
+    const snapshot = await this.workspaceBaseline();
+    if (snapshot !== undefined) {
+      this.workspaceCache = { at: Date.now(), items: snapshot.items, archivedSessionIds: snapshot.archivedSessionIds };
+    }
+    return snapshot;
   }
 
   /**
-   * One-shot subscription to the dsh 0.1.2+ `workspace/follow` stream.
-   * Returns the baseline frame (workspaces + archive set), or undefined.
+   * One-shot subscription to the dsh `workspace/follow` stream (the 0.1.2+
+   * source of truth for workspaces + archive set; rc.1 keeps the stream even
+   * after the unary migration — only the MUTATIONS moved to unary `workspace/*`
+   * Remote methods). Returns the baseline frame, or undefined.
    */
   private async workspaceBaseline(): Promise<
     | {
@@ -1050,6 +1202,11 @@ export class DshManager {
         this.opts.log(`start: adopting existing server at ${candidate}`);
         this.external = true;
         this.url = candidate;
+        // An adopted server may come from a different install than any CLI we
+        // ever spawned — force the tree scans (never the stale bin anchor).
+        this.resolvedCliBin = undefined;
+        this.workspaceListMode = undefined;
+        this.workspaceCache = undefined;
         this.browserAuth = await this.detectBrowserAuth(candidate);
         this.authCookie = undefined;
         this.everRan = true;
@@ -1079,6 +1236,16 @@ export class DshManager {
       this.setState("error", "dsh CLI not found. Install it (npm i -g @deepseek-ai/dsh) or set dsh.cliPath.");
       return;
     }
+    // Remember the spawned bin so the frontend-patch discovery can resolve
+    // the EXACT dist that this server serves (dsh-web-frontend is usually a
+    // nested dependency of the dsh package). A PATH command (shell:true) has
+    // no file to anchor on — the npm/npx tree scans below still apply.
+    this.resolvedCliBin =
+      cli.prefixArgs[0] !== undefined && /\.js$/i.test(cli.prefixArgs[0]) && existsSync(cli.prefixArgs[0])
+        ? cli.prefixArgs[0]
+        : undefined;
+    this.workspaceListMode = undefined;
+    this.workspaceCache = undefined;
 
     // 3. Spawn `dsh web`.
     this.setState("starting");

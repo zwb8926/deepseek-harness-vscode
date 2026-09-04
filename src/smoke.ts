@@ -266,10 +266,10 @@ async function main(): Promise<void> {
   {
     const side = await httpJson("GET", embedBase + "/?dshPanel=sidebar");
     check("GET /?dshPanel=sidebar → 200", side.status === 200, `status=${side.status}`);
-    check("sidebar panel page carries the marker", side.text.includes("dsh-vscode-panel"), "panel marker missing");
+    check("sidebar panel page carries the marker", side.text.includes("dsh-vscode-panel"), "panel marker missing (the runtime patch must reach the SERVED frontend dist)");
     const center = await httpJson("GET", embedBase + "/?dshPanel=center");
     check("GET /?dshPanel=center → 200", center.status === 200, `status=${center.status}`);
-    check("center panel page carries the marker", center.text.includes("dsh-vscode-panel"), "panel marker missing");
+    check("center panel page carries the marker", center.text.includes("dsh-vscode-panel"), "panel marker missing (the runtime patch must reach the SERVED frontend dist)");
   }
   const injected = injectPanelSupport("<html><head></head></html>");
   check("injectPanelSupport injects once", injected !== undefined && (injected as string).includes("dsh-vscode-panel"), "inject failed");
@@ -330,14 +330,21 @@ async function main(): Promise<void> {
     const escapedPath = projectDir.replace(/\\/g, "\\\\");
     check("workspace.list contains the project path", wsList.status === 200 && wsList.text.includes(escapedPath), `status=${wsList.status} body=${wsList.text.slice(0, 300)}`);
   } else {
-    // dsh 0.1.2+ has no unary workspace.list: the manager subscribes to the
-    // workspace/follow stream for the baseline (workspaces + archive set).
+    // dsh 0.1.2+ (alpha.2 … rc.1) has NO unary workspace.list (verified: the
+    // endpoint answers 404 on rc.1): the workspace list + archive set ride
+    // the `workspace/follow` stream baseline, while workspace MUTATIONS are
+    // unary `workspace/*` Remotes. The manager probes the unary endpoint once
+    // (future-proof) and then subscribes to the follow baseline.
     const baseline = await manager.listWorkspaces();
     check(
       "workspace/follow baseline contains the project path",
       (baseline?.items ?? []).some((w) => w.path === projectDir),
       `items=${JSON.stringify((baseline?.items ?? []).map((w) => w.path))} archived=${JSON.stringify(baseline?.archivedSessionIds ?? null)}`
     );
+    // The decided list mode is cached; a second call must still return data
+    // (the launcher refreshes every few seconds against the cache).
+    const again = await manager.listWorkspaces();
+    check("second listWorkspaces still resolves", (again?.items ?? []).some((w) => w.path === projectDir), `items=${JSON.stringify((again?.items ?? []).map((w) => w.path))}`);
   }
   const sessions = await manager.listSessions();
   check("session.list reports the project cwd", (sessions ?? []).some((s) => s.cwd === projectDir), `sessions=${JSON.stringify(sessions?.map((s) => ({ id: s.sessionId, cwd: s.cwd })))}`);

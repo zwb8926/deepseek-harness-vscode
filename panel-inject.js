@@ -9,18 +9,33 @@
 // three-column grid with CSS only:
 //
 //   - sidebar: keep only the sidebar column and force the frame to the wide
-//     breakpoint (SIDEBAR_AUTO_COLLAPSE = 1024px) so the sidebar renders
-//     expanded instead of collapsing to the 56px rail in a narrow viewport.
-//     The sidebar's own collapse/expand toggle (the rail chevron at the top
-//     right) is hidden — the launcher is always expanded.
-//   - center: drop the sidebar column (and its drag handle) and let the
-//     conversation span tracks 1-2; the details column keeps its live width
-//     on track 3. The sidebar column is kept in the DOM (off-screen, hidden,
-//     inert) because the settings modal lives inside it; its overlay is
-//     re-enabled so the modal covers the editor tab.
+//     breakpoint (the GUI auto-collapses below 1024px — SIDEBAR_AUTO_COLLAPSE)
+//     so the sidebar renders expanded instead of collapsing to the 56px rail
+//     in a narrow viewport. The rail expand/collapse control is hidden — the
+//     launcher is always expanded.
+//   - center: render the GUI as-is (full interactive layout). Hiding the
+//     sidebar column made rc.1's settings modal inert (the modal lives in the
+//     sidebar subtree, which the off-screen column also made
+//     `pointer-events:none`), so the editor tab keeps the whole GUI: sessions
+//     sidebar, its toggle, and a fully clickable settings dialog.
+//
+// Frontend versions. The adapter was written against the 0.1.2-alpha.2 DOM
+// and still matches 0.1.2-rc.1: the AppFrame source is unchanged between the
+// two releases (three-column grid with inline `grid-template-columns`, drag
+// handles with `data-side`, column CSS-module locals sidebarCol/centerCol/
+// detailsCol/frame/handle/overlay). CSS-module class names are minified to a
+// `<hash>_<local>` token (e.g. `pI_x6G_centerCol`), so every rule matches on
+// the stable `_<local>` SUFFIX / substring rather than a full class name.
+// rc.1 ships each UI plugin as its own runtime bundle that injects its
+// stylesheet via a `<style data-plugin-css>` tag (they are NOT in the shell
+// assets — searching only `assets/index-*.js` for `sidebarCol` etc. finds
+// nothing and is the wrong place to look). The layout classes exist only
+// once the plugin bundle runs, so this script applies its rules with
+// !important and lets React mount underneath them.
 //
 // The current session selection is client-local (persisted under
-// `dsh.sessions.current`, no cross-tab live sync), so:
+// `dsh.sessions.current` by the session-controller snapshot store — rc.1
+// keeps the same key, so the coordination below is unchanged), so:
 //
 //   - the center panel listens for `storage` events and reloads itself when
 //     the selection changes in another same-origin context (the launcher).
@@ -133,53 +148,20 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   document.head.appendChild(style);
   if (panel !== 'sidebar' && panel !== 'center') return;
   document.documentElement.setAttribute('data-dsh-panel', panel);
+  // The AppFrame grid owns the three columns. Other rc.1 UI modules reuse the
+  // CSS-module local name "_frame" (attachment/chat/subagent/user-questions
+  // frames), so the frame-anchored rules below scope to the LAYOUT frame —
+  // the one whose direct children include the sidebar column.
+  var frameSel = '[class$="_frame"]:has(> [class*="sidebarCol"])';
   var panelStyle = document.createElement('style');
   panelStyle.textContent =
     'html[data-dsh-panel="sidebar"] [class*="centerCol"],' +
     'html[data-dsh-panel="sidebar"] [class*="detailsCol"],' +
-    'html[data-dsh-panel="sidebar"] [class$="_frame"] > [class$="_handle"],' +
+    'html[data-dsh-panel="sidebar"] [class$="_handle"],' +
     'html[data-dsh-panel="sidebar"] button:has([class$="_railMark"])' +
       ' { display: none !important; }' +
-    'html[data-dsh-panel="sidebar"] [class$="_frame"] { min-width: 1024px !important; }' +
-    'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }' +
-    // The settings modal lives INSIDE the off-screen sidebar column. The
-    // column's position:fixed creates its own stacking context (z-index:
-    // auto — treated as 0 at the body level), so the always-on
-    // role rules (presentation 1000 / dialog 2000) only order things
-    // INSIDE that subtree: the settings panel loses to any body-level
-    // layer the editor column paints (composer z:1, conversation panel
-    // z:100, message-feedback note z:1100), i.e. the settings modal is
-    // covered by the chat UI in the editor tab. Fix: lift the off-screen
-    // sidebar column itself above the editor content (z-index 1500 —
-    // above everything the center column paints, below the dialog layer
-    // at 2000, so delete confirmations still cover the settings panel).
-    'html[data-dsh-panel="center"] [class*="sidebarCol"] {' +
-      ' position: fixed !important; left: -10000px !important; top: 0 !important;' +
-      ' width: 300px !important; height: 100% !important;' +
-      ' overflow: visible !important;' +
-      ' visibility: hidden !important; pointer-events: none !important;' +
-      ' z-index: 1500 !important; }' +
-    'html[data-dsh-panel="center"] [class*="sidebarCol"] [class$="_overlay"] {' +
-      ' position: fixed !important; inset: 0 !important;' +
-      ' visibility: visible !important; pointer-events: auto !important; }' +
-    // Settings popovers are React portals into the body, so they live in the
-    // body's stacking context. The off-screen sidebar subtree (parent of the
-    // settings panel) also competes at the body level via its z-index bump.
-    // The popover's own z-index is 1100; without this rule the rows inside
-    // the off-screen panel paint over the popover because the panel itself
-    // creates a stacking context (z-index:1, position:relative) that is
-    // taller than the sidebar's own z-index. Pin the popover to z-index:1
-    // to match the panel — the always-on rules above already cover the
-    // settings overlay and Modal; the menu/listbox popovers here get the
-    // same treatment.
-    // (The Modal-root [role="dialog"] rule is already injected above as
-    // always-on; the menu/listbox rules below were the original set.)
-    'html[data-dsh-panel="center"] [role="menu"],' +
-    'html[data-dsh-panel="center"] [role="listbox"]' +
-      ' { z-index: 1 !important; }' +
-    'html[data-dsh-panel="center"] [class$="_frame"] > [class$="_handle"][data-side="sidebar"]' +
-      ' { display: none !important; }' +
-    'html[data-dsh-panel="center"] [class*="centerCol"] { grid-column: 1 / 3 !important; }';
+    'html[data-dsh-panel="sidebar"] ' + frameSel + ' { min-width: 1024px !important; }' +
+    'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }';
   document.head.appendChild(panelStyle);
   var settingsKey = 'dsh.vscode.panel.settings';
   var settingsTrigger = '[class$="_settingsArea"] button[aria-haspopup="dialog"]';
