@@ -9,8 +9,8 @@
 本次更新：
 
 - **内嵌 dsh 升级到 `@deepseek-ai/dsh@0.1.2-alpha.2`**，扩展版本号同步为 2026.8.310（依赖树与前端拆分补丁随包重建）
-- **适配 dsh 0.1.2+ 浏览器会话鉴权**：新版 dsh 的 GUI 改为「`GET /?token=…` 交换 SameSite=Strict Cookie」鉴权，扩展管理器的健康检查、面板探测与全部 API 调用均已跟随该流程——自建服务直接兑换 token；接管同 `DSH_HOME` 的外部服务则从 `~/.dsh/.credentials.yaml` 的密钥伪造同一个 Cookie
-- **内置本地 GUI 代理（新增）**：跨源 webview iframe 无法携带 SameSite=Strict Cookie，扩展现在在本机随机端口启动一个反向代理，注入 Cookie 并转发 HTTP 与 WebSocket（`/api/remote.mux`），**新版 dsh 的完整 GUI（拆分面板、会话/工作区列表、实时流）仍可完整嵌入 VS Code**；代理启动失败时才回退为「在浏览器打开」
+- **适配 dsh 0.1.2+ 浏览器会话鉴权**：新版 dsh 的 GUI 改为鉴权，扩展管理器的健康检查、面板探测与全部 API 调用均已跟随该流程
+- **内置本地 GUI 代理（新增）**：**新版 dsh 的完整 GUI（拆分面板、会话/工作区列表、实时流）仍可完整嵌入 VS Code**
 - **RPC 协议自适应**：dsh 0.1.2+ 的 API 换为 typert 线协议（`namespace/method` 端点 + `{args:…}` 载荷），扩展自动识别并对齐；旧版 rc.2 服务仍按原协议通信，向后兼容
 - **工作区与归档正确**：新版 dsh 移除了 `workspace.list`（状态改走 `workspace/follow` 流），扩展改为订阅该流取得**真实工作区列表与真实归档集合**——左侧栏不再出现按目录臆造的工作区，已归档会话正确隐藏
 - **会话标题稳定显示**：部分历史会话在列表时缺少投影（标题显示「未命名」，需点开才会出现），扩展现在缓存标题并对缺失投影的会话自动通过 `session/follow` 快照回填
