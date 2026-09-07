@@ -1602,16 +1602,18 @@ export class DshManager {
       return;
     }
     const knownBest = [...known].sort((a, b) => compareVersions(b, a))[0];
-    const latest = await this.npmRegistryVersion(npm);
-    if (latest === undefined) {
+    const found = await this.npmRegistryVersion(npm);
+    if (found === undefined) {
       this.opts.log("auto-update: could not read the registry (offline?), staying on current dsh");
       return;
     }
+    const latest = found.version;
+    const channel = found.tag === "latest" ? "" : ` (${found.tag})`;
     if (compareVersions(latest, knownBest) <= 0) {
-      this.opts.log(`auto-update: registry ${latest} is not newer than ${knownBest}, nothing to do`);
+      this.opts.log(`auto-update: registry ${latest}${channel} is not newer than ${knownBest}, nothing to do`);
       return;
     }
-    this.opts.log(`auto-update: registry has ${latest} (> ${knownBest}) — installing into extension storage…`);
+    this.opts.log(`auto-update: registry has ${latest}${channel} (> ${knownBest}) — installing into extension storage…`);
     this.setState("installing");
     const dir = this.opts.autoInstallDir!;
     const result = await runCommand(
@@ -1627,17 +1629,43 @@ export class DshManager {
     if (installed !== undefined) candidates.push(installed);
   }
 
-  /** `npm view @deepseek-ai/dsh version` with a timeout; undefined on any failure. */
-  private async npmRegistryVersion(npm: string): Promise<string | undefined> {
-    const result = await runCommand(npm, ["view", "@deepseek-ai/dsh", "version"], {
+  /**
+   * The newest dsh release the registry advertises, pre-release channels
+   * included. `dist-tags` lists every published tag (latest, next, alpha, …);
+   * the highest semver wins so an rc/alpha published after a stable release
+   * still triggers the auto-update. Falls back to the plain `version` tag
+   * when `dist-tags` cannot be read.
+   */
+  private async npmRegistryVersion(npm: string): Promise<{ version: string; tag: string } | undefined> {
+    const result = await runCommand(npm, ["view", "@deepseek-ai/dsh", "dist-tags", "--json"], {
       shell: true,
       capture: true,
       timeoutMs: 20_000,
       log: this.opts.log
     });
-    if (!result.ok) return undefined;
-    const version = (result.stdout ?? "").trim().split(/\r?\n/)[0]?.trim();
-    return version !== undefined && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ? version : undefined;
+    if (result.ok) {
+      try {
+        const tags = JSON.parse(result.stdout ?? "{}") as Record<string, unknown>;
+        const entries = Object.entries(tags).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(entry[1])
+        );
+        if (entries.length > 0) {
+          const best = [...entries].sort((a, b) => compareVersions(b[1], a[1]))[0];
+          return { version: best[1], tag: best[0] };
+        }
+      } catch {
+        /* malformed dist-tags — fall through to the plain version */
+      }
+    }
+    const plain = await runCommand(npm, ["view", "@deepseek-ai/dsh", "version"], {
+      shell: true,
+      capture: true,
+      timeoutMs: 20_000,
+      log: this.opts.log
+    });
+    if (!plain.ok) return undefined;
+    const version = (plain.stdout ?? "").trim().split(/\r?\n/)[0]?.trim();
+    return version !== undefined && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ? { version, tag: "latest" } : undefined;
   }
 
   /** Probe the version of a PATH `dsh` command (best effort; unknown on failure). */
