@@ -25,13 +25,20 @@
 //     in (see the `_overlay` / `[role="dialog"]` rules below).
 //
 // Frontend versions. The adapter was written against the 0.1.2-alpha.2 DOM
-// and still matches 0.1.2-rc.1: the AppFrame source is unchanged between the
-// two releases (three-column grid with inline `grid-template-columns`, drag
-// handles with `data-side`, column CSS-module locals sidebarCol/centerCol/
-// detailsCol/frame/handle/overlay). CSS-module class names are minified to a
-// `<hash>_<local>` token (e.g. `pI_x6G_centerCol`), so every rule matches on
-// the stable `_<local>` SUFFIX / substring rather than a full class name.
-// rc.1 ships each UI plugin as its own runtime bundle that injects its
+// and still matches 0.1.5-alpha.2: the AppFrame source is unchanged across
+// alpha.2 / rc.1 / alpha.2-of-0.1.5 (three-column grid with inline
+// `grid-template-columns`, drag handles with `data-side`, column CSS-module
+// locals frame/sidebarCol/centerCol/frame/handle/overlayLayer). 0.1.5 renamed
+// two things the rules below care about: the third column is now the RIGHT BAR
+// (local `rightbarCol`, was `detailsCol`) and the centre slot is `main` (was
+// `conversation`) — the adapter matches both column names, so one injected
+// copy serves either frontend. The settings trigger and its dialog are still
+// rendered inside the sidebar subtree (`sidebar.settings`), so centre mode
+// still has to keep that column in the DOM. CSS-module class names are
+// minified to a `<hash>_<local>` token (e.g. `pI_x6G_centerCol`), so every
+// rule matches on the stable `_<local>` SUFFIX / substring rather than a full
+// class name.
+// Each UI plugin ships as its own runtime bundle that injects its
 // stylesheet via a `<style data-plugin-css>` tag (they are NOT in the shell
 // assets — searching only `assets/index-*.js` for `sidebarCol` etc. finds
 // nothing and is the wrong place to look). The layout classes exist only
@@ -39,8 +46,8 @@
 // !important and lets React mount underneath them.
 //
 // The current session selection is client-local (persisted under
-// `dsh.sessions.current` by the session-controller snapshot store — rc.1
-// keeps the same key, so the coordination below is unchanged), so:
+// `dsh.sessions.current` by the session-controller snapshot store — 0.1.5
+// keeps the same key and payload, so the coordination below is unchanged), so:
 //
 //   - the center panel listens for `storage` events and reloads itself when
 //     the selection changes in another same-origin context (the launcher).
@@ -146,7 +153,12 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       ' { z-index: 1600 !important; }' +
     // Modal stage / overlay / mask containers (role="presentation") nested
     // inside another layer (settings overlay, Modal root's mask, etc.).
-    '[role="presentation"]' +
+    //
+    // The dockkit tab strip is exempt: from 0.1.5 the shell renders it with
+    // role="presentation" too, and because z-index applies to a flex/grid item
+    // even when it is not positioned, this blanket pin would give an ordinary
+    // in-flow strip a stacking context at 1000 — i.e. above its own panes.
+    '[role="presentation"]:not([data-dockkit-strip-tabs])' +
       ' { z-index: 1000 !important; }';
   var style = document.createElement('style');
   style.textContent = alwaysOn;
@@ -174,8 +186,12 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   var centerDialog = centerSidebar + ' [role="dialog"]';
   var panelStyle = document.createElement('style');
   panelStyle.textContent =
+    // The third column is the details column up to 0.1.2 (detailsCol) and the
+    // right bar from 0.1.5 on (rightbarCol) — the adapter is injected into
+    // whatever frontend the server serves, so it matches both.
     'html[data-dsh-panel="sidebar"] [class*="centerCol"],' +
     'html[data-dsh-panel="sidebar"] [class*="detailsCol"],' +
+    'html[data-dsh-panel="sidebar"] [class*="rightbarCol"],' +
     'html[data-dsh-panel="sidebar"] [class$="_handle"],' +
     'html[data-dsh-panel="sidebar"] button:has([class$="_railMark"])' +
       ' { display: none !important; }' +

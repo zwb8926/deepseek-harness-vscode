@@ -792,12 +792,14 @@ export class DshManager {
       }
       return undefined;
     }
-    // 0.1.2+ wire. Actual releases so far (0.1.2-alpha.2 … 0.1.2-rc.1) expose
-    // NO unary workspace list: the real state (workspaces plus the archive
-    // set) rides the `workspace/follow` stream baseline, and every mutation
-    // (create/rename/delete/archiveSession/…) is a unary `workspace/*`
-    // Remote call. The first round probes the unary endpoint once (cheap,
-    // future-proof: a server that gains a unary list wins); afterwards the
+    // 0.1.2+ wire. Every release so far (0.1.2-alpha.2 / 0.1.2-rc.1 /
+    // 0.1.5-alpha.2) exposes NO unary workspace list: the real state
+    // (workspaces plus the archive set) rides the `workspace/follow` stream
+    // baseline, and every mutation (create/rename/delete/archiveSession/…) is
+    // a unary `workspace/*` Remote call. The first round probes the unary
+    // endpoint once (cheap, future-proof: a server that gains a unary list
+    // wins); a missing endpoint answers HTTP 404 with a plain-text `not found`
+    // body, which `unaryWorkspaceList` turns into undefined. Afterwards the
     // decided mode is cached so a launcher refresh never re-probes a 404.
     if (this.workspaceListMode === undefined) {
       const unary = await this.unaryWorkspaceList();
@@ -1140,18 +1142,30 @@ export class DshManager {
     if (q === "") return [];
     const lower = q.toLowerCase();
     try {
+      // Hits carry only {sessionId, snippet} — the session id is the join key
+      // back to session.list, which owns the title/cwd/running fields. Without
+      // that join every content hit would render as 未命名会话 (this is how the
+      // API has looked since 0.1.2, incl. 0.1.5-alpha.2).
       const remote = (await this.rpc("session.search", { query: q })) as
-        | { items?: Array<{ sessionId?: string; title?: string; workspace?: string; running?: boolean }> }
+        | { items?: Array<{ sessionId?: string; snippet?: string }> }
         | undefined;
       if (remote !== undefined && Array.isArray(remote.items)) {
-        return remote.items
-          .filter((it): it is { sessionId: string; title?: string; running?: boolean } => typeof it.sessionId === "string")
-          .slice(0, 30)
-          .map((it) => ({
+        const hits = remote.items
+          .filter((it): it is { sessionId: string; snippet?: string } => typeof it.sessionId === "string")
+          .slice(0, 30);
+        if (hits.length === 0) return [];
+        const known = new Map((await this.listSessions() ?? []).map((s) => [s.sessionId, s]));
+        return hits.map((it) => {
+          const row = known.get(it.sessionId);
+          const snippet = (it.snippet ?? "").replace(/\s+/g, " ").trim();
+          const title = row?.title != null && row.title !== "" ? row.title : snippet;
+          return {
             sessionId: it.sessionId,
-            title: it.title != null && it.title !== "" ? it.title : "未命名会话",
-            running: it.running
-          }));
+            title: title !== "" ? title : "未命名会话",
+            cwd: row?.cwd,
+            running: row?.running
+          };
+        });
       }
     } catch {
       /* fall through to local matching */

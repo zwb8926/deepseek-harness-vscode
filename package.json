@@ -178,7 +178,7 @@
     "smoke": "npm run compile && npm run patch-frontend && node out/smoke.js"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.2-rc.1",
+    "@deepseek-ai/dsh": "0.1.5-rc.1",
     "ws": "^8.21.3"
   },
   "devDependencies": {
@@ -188,5 +188,3 @@
     "typescript": "^5.4.5"
   }
 }
-
-
