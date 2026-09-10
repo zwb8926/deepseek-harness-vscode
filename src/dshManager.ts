@@ -89,8 +89,6 @@ export interface DshOptions {
   watchExternal?: boolean;
   /** When true, among the found dsh installs pick the newest version (default true). */
   preferNewer?: boolean;
-  /** When true (and preferNewer), check the npm registry on start and auto-install a newer @deepseek-ai/dsh. */
-  autoUpdate?: boolean;
   /** Test hook: force this executable as the node runtime. */
   nodeExecOverride?: string;
   /** Test hook: treat nodeExecOverride as an Electron binary (ELECTRON_RUN_AS_NODE). */
@@ -217,7 +215,7 @@ export class DshManager {
   }
 
   /** Update spawn-relevant options (applied on the next start). */
-  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "autoUpdate" | "watchExternal">>): void {
+  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "watchExternal">>): void {
     Object.assign(this.opts, partial);
   }
 
@@ -531,7 +529,7 @@ export class DshManager {
     };
     // 1. The extension-bundled install (normally already patched at build time).
     pushRoot(path.join(__dirname, ".."));
-    // 2. The auto-install / auto-update directory in the extension storage.
+    // 2. The auto-install directory in the extension storage.
     if (this.opts.autoInstallDir !== undefined) pushRoot(this.opts.autoInstallDir);
     // 3. The exact dist of the server we spawned (if any).
     if (this.resolvedCliBin !== undefined) {
@@ -1565,14 +1563,7 @@ export class DshManager {
       if (globalBin !== undefined) candidates.push(globalBin);
     }
 
-    // 3. Auto-update: when enabled and npm is available, compare the npm
-    //    registry "latest" against the best candidate; if newer, install it
-    //    into the extension storage and let it win the ranking.
-    if ((opts.preferNewer ?? true) && opts.autoUpdate === true && opts.autoInstallDir !== undefined) {
-      await this.maybeAutoUpdate(candidates);
-    }
-
-    // 4. Pick: newest when preferNewer (default), else the bundled-first order.
+    // 3. Pick: newest when preferNewer (default), else the bundled-first order.
     let chosen: (typeof candidates)[number] | undefined;
     if (candidates.length > 0) {
       if (opts.preferNewer ?? true) {
@@ -1593,7 +1584,7 @@ export class DshManager {
       return chosen;
     }
 
-    // 5. Auto-install into the extension storage directory (no candidate at all).
+    // 4. Auto-install into the extension storage directory (no candidate at all).
     if (opts.autoInstall && opts.autoInstallDir !== undefined) {
       this.setState("installing");
       const installed = await this.autoInstall(opts.autoInstallDir);
@@ -1601,85 +1592,6 @@ export class DshManager {
     }
 
     return undefined;
-  }
-
-  /** Install the newest @deepseek-ai/dsh from the registry when it is newer than every known candidate. */
-  private async maybeAutoUpdate(candidates: Array<{ version?: string }>): Promise<void> {
-    const npm = await findNpm();
-    if (npm === undefined) {
-      this.opts.log("auto-update: npm not found, staying on bundled dsh");
-      return;
-    }
-    const known = candidates.map((c) => c.version).filter((v): v is string => v !== undefined);
-    if (known.length === 0) {
-      this.opts.log("auto-update: no known dsh version to compare against");
-      return;
-    }
-    const knownBest = [...known].sort((a, b) => compareVersions(b, a))[0];
-    const found = await this.npmRegistryVersion(npm);
-    if (found === undefined) {
-      this.opts.log("auto-update: could not read the registry (offline?), staying on current dsh");
-      return;
-    }
-    const latest = found.version;
-    const channel = found.tag === "latest" ? "" : ` (${found.tag})`;
-    if (compareVersions(latest, knownBest) <= 0) {
-      this.opts.log(`auto-update: registry ${latest}${channel} is not newer than ${knownBest}, nothing to do`);
-      return;
-    }
-    this.opts.log(`auto-update: registry has ${latest}${channel} (> ${knownBest}) — installing into extension storage…`);
-    this.setState("installing");
-    const dir = this.opts.autoInstallDir!;
-    const result = await runCommand(
-      npm,
-      ["install", "--no-fund", "--no-audit", "--prefix", dir, `@deepseek-ai/dsh@${latest}`],
-      { shell: true, log: this.opts.log, timeoutMs: 15 * 60_000 }
-    );
-    if (!result.ok) {
-      this.opts.log("auto-update: install failed, staying on the current dsh");
-      return;
-    }
-    const installed = await this.locateInTree(dir);
-    if (installed !== undefined) candidates.push(installed);
-  }
-
-  /**
-   * The newest dsh release the registry advertises, pre-release channels
-   * included. `dist-tags` lists every published tag (latest, next, alpha, …);
-   * the highest semver wins so an rc/alpha published after a stable release
-   * still triggers the auto-update. Falls back to the plain `version` tag
-   * when `dist-tags` cannot be read.
-   */
-  private async npmRegistryVersion(npm: string): Promise<{ version: string; tag: string } | undefined> {
-    const result = await runCommand(npm, ["view", "@deepseek-ai/dsh", "dist-tags", "--json"], {
-      shell: true,
-      capture: true,
-      timeoutMs: 20_000,
-      log: this.opts.log
-    });
-    if (result.ok) {
-      try {
-        const tags = JSON.parse(result.stdout ?? "{}") as Record<string, unknown>;
-        const entries = Object.entries(tags).filter(
-          (entry): entry is [string, string] => typeof entry[1] === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(entry[1])
-        );
-        if (entries.length > 0) {
-          const best = [...entries].sort((a, b) => compareVersions(b[1], a[1]))[0];
-          return { version: best[1], tag: best[0] };
-        }
-      } catch {
-        /* malformed dist-tags — fall through to the plain version */
-      }
-    }
-    const plain = await runCommand(npm, ["view", "@deepseek-ai/dsh", "version"], {
-      shell: true,
-      capture: true,
-      timeoutMs: 20_000,
-      log: this.opts.log
-    });
-    if (!plain.ok) return undefined;
-    const version = (plain.stdout ?? "").trim().split(/\r?\n/)[0]?.trim();
-    return version !== undefined && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ? { version, tag: "latest" } : undefined;
   }
 
   /** Probe the version of a PATH `dsh` command (best effort; unknown on failure). */
@@ -1833,10 +1745,10 @@ export async function findOnPath(name: string): Promise<string | undefined> {
  * (`C:\Program Files\nodejs\npm`, the Git-Bash script) BEFORE `npm.cmd`, and
  * cmd.exe can run neither that shim nor a spaced path it was handed unquoted —
  * spawning it through `shell: true` died with `'C:\Program' is not recognized`,
- * which is how the registry check behind `dsh.autoUpdate` (and the
- * auto-install fallback) silently failed on every default Node install. Prefer
- * the `.cmd` shim so the shell can execute it at all; the space in the path is
- * handled by the quoting in runCommand.
+ * which is how the auto-install fallback and the global-root lookup silently
+ * failed on every default Node install. Prefer the `.cmd` shim so the shell can
+ * execute it at all; the space in the path is handled by the quoting in
+ * runCommand.
  */
 export async function findNpm(): Promise<string | undefined> {
   const names = process.platform === "win32" ? ["npm.cmd", "npm"] : ["npm"];

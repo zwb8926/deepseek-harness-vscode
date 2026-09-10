@@ -177,26 +177,38 @@ async function scenarioElectronNode(cliPath: string | undefined, electron: strin
   check("electron-node server stopped", manager.info.state === "stopped", `state=${manager.info.state}`);
 }
 
-/** Fourth scenario: autoUpdate consults the registry; with no newer release the bundled dsh must still run. */
-async function scenarioAutoUpdate(cliPath: string | undefined): Promise<void> {
-  console.log("— auto-update —");
+/**
+ * Fourth scenario: resolution with an install directory configured must stay
+ * entirely offline — the extension no longer consults the npm registry, so no
+ * `auto-update:` line may appear and the given CLI must still run.
+ */
+async function scenarioResolution(cliPath: string | undefined): Promise<void> {
+  console.log("— resolution (no registry) —");
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-smoke-"));
-  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-autoupd-"));
+  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-resolve-"));
+  const lines: string[] = [];
   const manager = new DshManager({
     port: 0,
     home,
     cliPath,
     autoInstall: false,
-    autoUpdate: true,
     preferNewer: true,
     autoInstallDir: installDir,
     autoRestart: false,
     cwd: home,
     onInfo: (info) => console.log(`  [state] ${JSON.stringify(info)}`),
-    log: (line) => console.log(`  [dsh] ${line}`)
+    log: (line) => {
+      lines.push(line);
+      console.log(`  [dsh] ${line}`);
+    }
   });
   await manager.start();
-  check("auto-update still reaches running", manager.info.state === "running" && manager.info.url !== undefined, `state=${manager.info.state} detail=${manager.info.detail ?? ""}`);
+  check("resolution still reaches running", manager.info.state === "running" && manager.info.url !== undefined, `state=${manager.info.state} detail=${manager.info.detail ?? ""}`);
+  check(
+    "no npm-registry access (auto-update removed)",
+    !lines.some((l) => /auto-update|dist-tags|registry/i.test(l)),
+    lines.filter((l) => /auto-update|registry/i.test(l)).join(" | ") || "clean"
+  );
   await manager.stop();
 }
 
@@ -361,7 +373,7 @@ async function main(): Promise<void> {
     await scenarioElectronNode(cli.cliPath, cli.electron);
   }
 
-  await scenarioAutoUpdate(cli.cliPath);
+  await scenarioResolution(cli.cliPath);
 
   console.log(failures === 0 ? "SMOKE PASSED" : `SMOKE FAILED (${failures} assertion${failures === 1 ? "" : "s"})`);
   process.exit(failures === 0 ? 0 : 1);
