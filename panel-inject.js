@@ -13,20 +13,32 @@
 //     so the sidebar renders expanded instead of collapsing to the 56px rail
 //     in a narrow viewport. The rail expand/collapse control is hidden — the
 //     launcher is always expanded.
-//   - center: render the GUI as-is (full interactive layout). Hiding the
-//     sidebar column made rc.1's settings modal inert (the modal lives in the
-//     sidebar subtree, which the off-screen column also made
-//     `pointer-events:none`), so the editor tab keeps the whole GUI: sessions
-//     sidebar, its toggle, and a fully clickable settings dialog.
+//   - center: the editor tab is the conversation only. The GUI's own sidebar
+//     column is suppressed there (it duplicates the VS Code launcher, which
+//     lists the same sessions), and the conversation spans tracks 1-2 so the
+//     hidden strip costs no width. The column itself is NOT removed from the
+//     DOM: rc.1 mounts the settings trigger AND its modal inside that subtree
+//     (slot `sidebar.settings`), so dropping the element would take the
+//     settings dialog with it. Painting is suppressed instead — `visibility`
+//     rather than `display`, which keeps the subtree laid out, keeps the
+//     trigger clickable through `.click()`, and lets the dialog layer opt back
+//     in (see the `_overlay` / `[role="dialog"]` rules below).
 //
 // Frontend versions. The adapter was written against the 0.1.2-alpha.2 DOM
-// and still matches 0.1.2-rc.1: the AppFrame source is unchanged between the
-// two releases (three-column grid with inline `grid-template-columns`, drag
-// handles with `data-side`, column CSS-module locals sidebarCol/centerCol/
-// detailsCol/frame/handle/overlay). CSS-module class names are minified to a
-// `<hash>_<local>` token (e.g. `pI_x6G_centerCol`), so every rule matches on
-// the stable `_<local>` SUFFIX / substring rather than a full class name.
-// rc.1 ships each UI plugin as its own runtime bundle that injects its
+// and still matches 0.1.5-alpha.2: the AppFrame source is unchanged across
+// alpha.2 / rc.1 / alpha.2-of-0.1.5 (three-column grid with inline
+// `grid-template-columns`, drag handles with `data-side`, column CSS-module
+// locals frame/sidebarCol/centerCol/frame/handle/overlayLayer). 0.1.5 renamed
+// two things the rules below care about: the third column is now the RIGHT BAR
+// (local `rightbarCol`, was `detailsCol`) and the centre slot is `main` (was
+// `conversation`) — the adapter matches both column names, so one injected
+// copy serves either frontend. The settings trigger and its dialog are still
+// rendered inside the sidebar subtree (`sidebar.settings`), so centre mode
+// still has to keep that column in the DOM. CSS-module class names are
+// minified to a `<hash>_<local>` token (e.g. `pI_x6G_centerCol`), so every
+// rule matches on the stable `_<local>` SUFFIX / substring rather than a full
+// class name.
+// Each UI plugin ships as its own runtime bundle that injects its
 // stylesheet via a `<style data-plugin-css>` tag (they are NOT in the shell
 // assets — searching only `assets/index-*.js` for `sidebarCol` etc. finds
 // nothing and is the wrong place to look). The layout classes exist only
@@ -34,8 +46,8 @@
 // !important and lets React mount underneath them.
 //
 // The current session selection is client-local (persisted under
-// `dsh.sessions.current` by the session-controller snapshot store — rc.1
-// keeps the same key, so the coordination below is unchanged), so:
+// `dsh.sessions.current` by the session-controller snapshot store — 0.1.5
+// keeps the same key and payload, so the coordination below is unchanged), so:
 //
 //   - the center panel listens for `storage` events and reloads itself when
 //     the selection changes in another same-origin context (the launcher).
@@ -141,7 +153,12 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
       ' { z-index: 1600 !important; }' +
     // Modal stage / overlay / mask containers (role="presentation") nested
     // inside another layer (settings overlay, Modal root's mask, etc.).
-    '[role="presentation"]' +
+    //
+    // The dockkit tab strip is exempt: from 0.1.5 the shell renders it with
+    // role="presentation" too, and because z-index applies to a flex/grid item
+    // even when it is not positioned, this blanket pin would give an ordinary
+    // in-flow strip a stacking context at 1000 — i.e. above its own panes.
+    '[role="presentation"]:not([data-dockkit-strip-tabs])' +
       ' { z-index: 1000 !important; }';
   var style = document.createElement('style');
   style.textContent = alwaysOn;
@@ -153,15 +170,57 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   // frames), so the frame-anchored rules below scope to the LAYOUT frame —
   // the one whose direct children include the sidebar column.
   var frameSel = '[class$="_frame"]:has(> [class*="sidebarCol"])';
+  // Center-mode handles. centerSidebar is the GUI's own sidebar column; the
+  // settings dialog lives inside it, so the column is suppressed by PAINTING
+  // and kept in place: display:none would unmount the dialog, and the older
+  // off-screen treatment (position:fixed + visibility:hidden on the column,
+  // with only its overlay re-enabled) is the one that left rc.1's settings
+  // dialog unusable and got deleted in 2026.9.4 — a column that stays in the
+  // grid flow needs no such escape hatch.
+  var centerSidebar = 'html[data-dsh-panel="center"] ' + frameSel + ' > [class*="sidebarCol"]';
+  // The settings modal (rc.1: a <hash>_overlay carrying the
+  // <hash>_panel[role="dialog"]) is a fixed full-viewport layer rendered in
+  // that subtree — it opts back into visibility, as does any dialog that ever
+  // renders there.
+  var centerOverlay = centerSidebar + ' [class$="_overlay"]:has([role="dialog"])';
+  var centerDialog = centerSidebar + ' [role="dialog"]';
   var panelStyle = document.createElement('style');
   panelStyle.textContent =
+    // The third column is the details column up to 0.1.2 (detailsCol) and the
+    // right bar from 0.1.5 on (rightbarCol) — the adapter is injected into
+    // whatever frontend the server serves, so it matches both.
     'html[data-dsh-panel="sidebar"] [class*="centerCol"],' +
     'html[data-dsh-panel="sidebar"] [class*="detailsCol"],' +
+    'html[data-dsh-panel="sidebar"] [class*="rightbarCol"],' +
     'html[data-dsh-panel="sidebar"] [class$="_handle"],' +
     'html[data-dsh-panel="sidebar"] button:has([class$="_railMark"])' +
       ' { display: none !important; }' +
     'html[data-dsh-panel="sidebar"] ' + frameSel + ' { min-width: 1024px !important; }' +
-    'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }';
+    'html[data-dsh-panel="sidebar"] body { overflow: hidden !important; }' +
+    // Center: paint nothing of the sidebar column (rail, session list, its
+    // footer) and everything inside it, except a dialog layer.
+    centerSidebar + ',' + centerSidebar + ' * { visibility: hidden !important; }' +
+    centerOverlay + ',' + centerOverlay + ' *,' +
+    centerDialog + ',' + centerDialog + ' * { visibility: visible !important; }' +
+    // The (invisible) column stays a grid item, so it can also lift the
+    // settings dialog above the conversation's own layers (composer z:1,
+    // conversation z:100, feedback note z:1100) while staying under the
+    // body-level Modal container the always-on rules pin at 1600:
+    // 编辑区 < settings面板 < Modal容器 < deleteDialog.
+    //
+    // Both columns are placed EXPLICITLY, in row 1: the frame is a one-row
+    // grid whose tracks come from an inline grid-template-columns, so
+    // auto-placement is the trap here. Left auto, the hidden column is pushed
+    // past the explicitly placed conversation (into the details track), and a
+    // bare grid-column: 1 / 3 on the conversation sends it to an implicit
+    // SECOND row (measured: y = frame height, height 0). With both pinned,
+    // the details column keeps auto-placing into its own track 3.
+    centerSidebar + ' { position: relative !important; z-index: 1500 !important;' +
+      ' grid-area: 1 / 1 / 2 / 2 !important; }' +
+    'html[data-dsh-panel="center"] ' + frameSel + ' > [class*="centerCol"]' +
+      ' { grid-area: 1 / 1 / 2 / 3 !important; }' +
+    'html[data-dsh-panel="center"] ' + frameSel + ' > [class$="_handle"][data-side="sidebar"]' +
+      ' { display: none !important; }';
   document.head.appendChild(panelStyle);
   var settingsKey = 'dsh.vscode.panel.settings';
   var settingsTrigger = '[class$="_settingsArea"] button[aria-haspopup="dialog"]';

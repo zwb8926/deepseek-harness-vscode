@@ -89,8 +89,6 @@ export interface DshOptions {
   watchExternal?: boolean;
   /** When true, among the found dsh installs pick the newest version (default true). */
   preferNewer?: boolean;
-  /** When true (and preferNewer), check the npm registry on start and auto-install a newer @deepseek-ai/dsh. */
-  autoUpdate?: boolean;
   /** Test hook: force this executable as the node runtime. */
   nodeExecOverride?: string;
   /** Test hook: treat nodeExecOverride as an Electron binary (ELECTRON_RUN_AS_NODE). */
@@ -217,7 +215,7 @@ export class DshManager {
   }
 
   /** Update spawn-relevant options (applied on the next start). */
-  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "autoUpdate" | "watchExternal">>): void {
+  configure(partial: Partial<Pick<DshOptions, "port" | "home" | "cliPath" | "extraArgs" | "cwd" | "autoInstall" | "autoRestart" | "autoInstallDir" | "preferNewer" | "watchExternal">>): void {
     Object.assign(this.opts, partial);
   }
 
@@ -531,7 +529,7 @@ export class DshManager {
     };
     // 1. The extension-bundled install (normally already patched at build time).
     pushRoot(path.join(__dirname, ".."));
-    // 2. The auto-install / auto-update directory in the extension storage.
+    // 2. The auto-install directory in the extension storage.
     if (this.opts.autoInstallDir !== undefined) pushRoot(this.opts.autoInstallDir);
     // 3. The exact dist of the server we spawned (if any).
     if (this.resolvedCliBin !== undefined) {
@@ -792,12 +790,14 @@ export class DshManager {
       }
       return undefined;
     }
-    // 0.1.2+ wire. Actual releases so far (0.1.2-alpha.2 … 0.1.2-rc.1) expose
-    // NO unary workspace list: the real state (workspaces plus the archive
-    // set) rides the `workspace/follow` stream baseline, and every mutation
-    // (create/rename/delete/archiveSession/…) is a unary `workspace/*`
-    // Remote call. The first round probes the unary endpoint once (cheap,
-    // future-proof: a server that gains a unary list wins); afterwards the
+    // 0.1.2+ wire. Every release so far (0.1.2-alpha.2 / 0.1.2-rc.1 /
+    // 0.1.5-alpha.2) exposes NO unary workspace list: the real state
+    // (workspaces plus the archive set) rides the `workspace/follow` stream
+    // baseline, and every mutation (create/rename/delete/archiveSession/…) is
+    // a unary `workspace/*` Remote call. The first round probes the unary
+    // endpoint once (cheap, future-proof: a server that gains a unary list
+    // wins); a missing endpoint answers HTTP 404 with a plain-text `not found`
+    // body, which `unaryWorkspaceList` turns into undefined. Afterwards the
     // decided mode is cached so a launcher refresh never re-probes a 404.
     if (this.workspaceListMode === undefined) {
       const unary = await this.unaryWorkspaceList();
@@ -1140,18 +1140,30 @@ export class DshManager {
     if (q === "") return [];
     const lower = q.toLowerCase();
     try {
+      // Hits carry only {sessionId, snippet} — the session id is the join key
+      // back to session.list, which owns the title/cwd/running fields. Without
+      // that join every content hit would render as 未命名会话 (this is how the
+      // API has looked since 0.1.2, incl. 0.1.5-alpha.2).
       const remote = (await this.rpc("session.search", { query: q })) as
-        | { items?: Array<{ sessionId?: string; title?: string; workspace?: string; running?: boolean }> }
+        | { items?: Array<{ sessionId?: string; snippet?: string }> }
         | undefined;
       if (remote !== undefined && Array.isArray(remote.items)) {
-        return remote.items
-          .filter((it): it is { sessionId: string; title?: string; running?: boolean } => typeof it.sessionId === "string")
-          .slice(0, 30)
-          .map((it) => ({
+        const hits = remote.items
+          .filter((it): it is { sessionId: string; snippet?: string } => typeof it.sessionId === "string")
+          .slice(0, 30);
+        if (hits.length === 0) return [];
+        const known = new Map((await this.listSessions() ?? []).map((s) => [s.sessionId, s]));
+        return hits.map((it) => {
+          const row = known.get(it.sessionId);
+          const snippet = (it.snippet ?? "").replace(/\s+/g, " ").trim();
+          const title = row?.title != null && row.title !== "" ? row.title : snippet;
+          return {
             sessionId: it.sessionId,
-            title: it.title != null && it.title !== "" ? it.title : "未命名会话",
-            running: it.running
-          }));
+            title: title !== "" ? title : "未命名会话",
+            cwd: row?.cwd,
+            running: row?.running
+          };
+        });
       }
     } catch {
       /* fall through to local matching */
@@ -1551,14 +1563,7 @@ export class DshManager {
       if (globalBin !== undefined) candidates.push(globalBin);
     }
 
-    // 3. Auto-update: when enabled and npm is available, compare the npm
-    //    registry "latest" against the best candidate; if newer, install it
-    //    into the extension storage and let it win the ranking.
-    if ((opts.preferNewer ?? true) && opts.autoUpdate === true && opts.autoInstallDir !== undefined) {
-      await this.maybeAutoUpdate(candidates);
-    }
-
-    // 4. Pick: newest when preferNewer (default), else the bundled-first order.
+    // 3. Pick: newest when preferNewer (default), else the bundled-first order.
     let chosen: (typeof candidates)[number] | undefined;
     if (candidates.length > 0) {
       if (opts.preferNewer ?? true) {
@@ -1579,7 +1584,7 @@ export class DshManager {
       return chosen;
     }
 
-    // 5. Auto-install into the extension storage directory (no candidate at all).
+    // 4. Auto-install into the extension storage directory (no candidate at all).
     if (opts.autoInstall && opts.autoInstallDir !== undefined) {
       this.setState("installing");
       const installed = await this.autoInstall(opts.autoInstallDir);
@@ -1587,57 +1592,6 @@ export class DshManager {
     }
 
     return undefined;
-  }
-
-  /** Install the newest @deepseek-ai/dsh from the registry when it is newer than every known candidate. */
-  private async maybeAutoUpdate(candidates: Array<{ version?: string }>): Promise<void> {
-    const npm = await findOnPath("npm");
-    if (npm === undefined) {
-      this.opts.log("auto-update: npm not found, staying on bundled dsh");
-      return;
-    }
-    const known = candidates.map((c) => c.version).filter((v): v is string => v !== undefined);
-    if (known.length === 0) {
-      this.opts.log("auto-update: no known dsh version to compare against");
-      return;
-    }
-    const knownBest = [...known].sort((a, b) => compareVersions(b, a))[0];
-    const latest = await this.npmRegistryVersion(npm);
-    if (latest === undefined) {
-      this.opts.log("auto-update: could not read the registry (offline?), staying on current dsh");
-      return;
-    }
-    if (compareVersions(latest, knownBest) <= 0) {
-      this.opts.log(`auto-update: registry ${latest} is not newer than ${knownBest}, nothing to do`);
-      return;
-    }
-    this.opts.log(`auto-update: registry has ${latest} (> ${knownBest}) — installing into extension storage…`);
-    this.setState("installing");
-    const dir = this.opts.autoInstallDir!;
-    const result = await runCommand(
-      npm,
-      ["install", "--no-fund", "--no-audit", "--prefix", dir, `@deepseek-ai/dsh@${latest}`],
-      { shell: true, log: this.opts.log, timeoutMs: 15 * 60_000 }
-    );
-    if (!result.ok) {
-      this.opts.log("auto-update: install failed, staying on the current dsh");
-      return;
-    }
-    const installed = await this.locateInTree(dir);
-    if (installed !== undefined) candidates.push(installed);
-  }
-
-  /** `npm view @deepseek-ai/dsh version` with a timeout; undefined on any failure. */
-  private async npmRegistryVersion(npm: string): Promise<string | undefined> {
-    const result = await runCommand(npm, ["view", "@deepseek-ai/dsh", "version"], {
-      shell: true,
-      capture: true,
-      timeoutMs: 20_000,
-      log: this.opts.log
-    });
-    if (!result.ok) return undefined;
-    const version = (result.stdout ?? "").trim().split(/\r?\n/)[0]?.trim();
-    return version !== undefined && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) ? version : undefined;
   }
 
   /** Probe the version of a PATH `dsh` command (best effort; unknown on failure). */
@@ -1690,7 +1644,7 @@ export class DshManager {
   }
 
   private async autoInstall(dir: string): Promise<{ cmd: string; prefixArgs: string[] } | undefined> {
-    const npm = await findOnPath("npm");
+    const npm = await findNpm();
     if (npm === undefined) {
       this.opts.log("auto-install: npm not found on PATH");
       return undefined;
@@ -1785,6 +1739,27 @@ export async function findOnPath(name: string): Promise<string | undefined> {
 }
 
 /**
+ * Resolve the npm command to spawn.
+ *
+ * On Windows `where npm` lists the extensionless shell shim
+ * (`C:\Program Files\nodejs\npm`, the Git-Bash script) BEFORE `npm.cmd`, and
+ * cmd.exe can run neither that shim nor a spaced path it was handed unquoted —
+ * spawning it through `shell: true` died with `'C:\Program' is not recognized`,
+ * which is how the auto-install fallback and the global-root lookup silently
+ * failed on every default Node install. Prefer the `.cmd` shim so the shell can
+ * execute it at all; the space in the path is handled by the quoting in
+ * runCommand.
+ */
+export async function findNpm(): Promise<string | undefined> {
+  const names = process.platform === "win32" ? ["npm.cmd", "npm"] : ["npm"];
+  for (const name of names) {
+    const found = await findOnPath(name);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
  * Resolve a node runtime able to run a JS file.
  *
  * Order: explicit test override → `node` on PATH → the bundled portable
@@ -1811,7 +1786,7 @@ async function resolveNodeExec(opts: DshOptions): Promise<{ cmd: string; electro
 }
 
 async function npmGlobalRoot(): Promise<string | undefined> {
-  const npm = await findOnPath("npm");
+  const npm = await findNpm();
   if (npm === undefined) return undefined;
   const result = await runCommand(npm, ["root", "-g"], { shell: true, capture: true });
   if (!result.ok) return undefined;
@@ -1830,7 +1805,17 @@ function runCommand(
   opts: { shell?: boolean; capture?: boolean; log?: (line: string) => void; timeoutMs?: number }
 ): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { shell: opts.shell === true, windowsHide: true });
+    // With `shell: true` Node concatenates command + args into ONE string for
+    // cmd.exe/sh without escaping (and warns about it — DEP0190), so a spaced
+    // path (`C:\Program Files\…`) is split at the space and the shell tries to
+    // run `C:\Program`. Quote what needs it and build the command line here;
+    // none of our arguments carry quotes of their own.
+    const quote = (value: string): string =>
+      opts.shell === true && /\s/.test(value) && !/^".*"$/.test(value) ? `"${value}"` : value;
+    const child =
+      opts.shell === true
+        ? spawn([quote(cmd), ...args.map(quote)].join(" "), { shell: true, windowsHide: true })
+        : spawn(cmd, args, { shell: false, windowsHide: true });
     let stdout = "";
     let stderr = "";
     let settled = false;

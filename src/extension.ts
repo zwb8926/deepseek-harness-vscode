@@ -136,7 +136,6 @@ export function activate(context: vscode.ExtensionContext): void {
       cliPath: getCfg("cliPath", ""),
       extraArgs: getCfg("extraArgs", []),
       preferNewer: getCfg("preferNewer", true),
-      autoUpdate: getCfg("autoUpdate", true),
       watchExternal: getCfg("autoStart", true),
       cwd: workspaceCwd()
     });
