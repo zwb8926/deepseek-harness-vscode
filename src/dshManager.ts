@@ -1605,7 +1605,7 @@ export class DshManager {
 
   /** Install the newest @deepseek-ai/dsh from the registry when it is newer than every known candidate. */
   private async maybeAutoUpdate(candidates: Array<{ version?: string }>): Promise<void> {
-    const npm = await findOnPath("npm");
+    const npm = await findNpm();
     if (npm === undefined) {
       this.opts.log("auto-update: npm not found, staying on bundled dsh");
       return;
@@ -1732,7 +1732,7 @@ export class DshManager {
   }
 
   private async autoInstall(dir: string): Promise<{ cmd: string; prefixArgs: string[] } | undefined> {
-    const npm = await findOnPath("npm");
+    const npm = await findNpm();
     if (npm === undefined) {
       this.opts.log("auto-install: npm not found on PATH");
       return undefined;
@@ -1827,6 +1827,27 @@ export async function findOnPath(name: string): Promise<string | undefined> {
 }
 
 /**
+ * Resolve the npm command to spawn.
+ *
+ * On Windows `where npm` lists the extensionless shell shim
+ * (`C:\Program Files\nodejs\npm`, the Git-Bash script) BEFORE `npm.cmd`, and
+ * cmd.exe can run neither that shim nor a spaced path it was handed unquoted —
+ * spawning it through `shell: true` died with `'C:\Program' is not recognized`,
+ * which is how the registry check behind `dsh.autoUpdate` (and the
+ * auto-install fallback) silently failed on every default Node install. Prefer
+ * the `.cmd` shim so the shell can execute it at all; the space in the path is
+ * handled by the quoting in runCommand.
+ */
+export async function findNpm(): Promise<string | undefined> {
+  const names = process.platform === "win32" ? ["npm.cmd", "npm"] : ["npm"];
+  for (const name of names) {
+    const found = await findOnPath(name);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
  * Resolve a node runtime able to run a JS file.
  *
  * Order: explicit test override → `node` on PATH → the bundled portable
@@ -1853,7 +1874,7 @@ async function resolveNodeExec(opts: DshOptions): Promise<{ cmd: string; electro
 }
 
 async function npmGlobalRoot(): Promise<string | undefined> {
-  const npm = await findOnPath("npm");
+  const npm = await findNpm();
   if (npm === undefined) return undefined;
   const result = await runCommand(npm, ["root", "-g"], { shell: true, capture: true });
   if (!result.ok) return undefined;
@@ -1872,7 +1893,17 @@ function runCommand(
   opts: { shell?: boolean; capture?: boolean; log?: (line: string) => void; timeoutMs?: number }
 ): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { shell: opts.shell === true, windowsHide: true });
+    // With `shell: true` Node concatenates command + args into ONE string for
+    // cmd.exe/sh without escaping (and warns about it — DEP0190), so a spaced
+    // path (`C:\Program Files\…`) is split at the space and the shell tries to
+    // run `C:\Program`. Quote what needs it and build the command line here;
+    // none of our arguments carry quotes of their own.
+    const quote = (value: string): string =>
+      opts.shell === true && /\s/.test(value) && !/^".*"$/.test(value) ? `"${value}"` : value;
+    const child =
+      opts.shell === true
+        ? spawn([quote(cmd), ...args.map(quote)].join(" "), { shell: true, windowsHide: true })
+        : spawn(cmd, args, { shell: false, windowsHide: true });
     let stdout = "";
     let stderr = "";
     let settled = false;
