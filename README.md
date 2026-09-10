@@ -6,7 +6,12 @@
 
 本扩展**自行启动并管理 `dsh web` 服务**，并把 GUI **拆成两块**嵌入 VS Code
 
-本次更新（适配 `@deepseek-ai/dsh@0.1.2-rc.1`，版本 2026.9.4）：
+本次更新（版本 2026.9.10）：
+
+- **编辑区不再出现 dsh 自己的左侧栏**（2026.9.4 的回归）：rc.1 适配把 `?dshPanel=center` 改成了「照原样渲染完整 GUI」，编辑标签页因此又显示出 dsh 的会话侧栏，与 VS Code 侧栏里的启动器重复。现在 center 模式重新隐藏它，但**不再**沿用旧的「移出屏幕 + `position: fixed`」做法（rc.1 上那套组合会让设置弹窗点不动，正是 2026.9.4 把它整段删掉的原因），改为：侧栏列保留在 DOM 与网格 track 1 中、只抑制绘制（`visibility`，而非 `display`），列内的对话框层（`<hash>_overlay` / `[role="dialog"]`）重新显形，会话列显式放到 track 1-2。设置弹窗照常从侧栏脚部触发按钮打开、居中覆盖、可点可关闭，隐藏的轨道也不占编辑区宽度
+- 其余行为不变：启动/接管/停止/重启、`?dshPanel=sidebar` 侧栏、主题联动、状态栏与「Open in Browser」
+
+上一版（适配 `@deepseek-ai/dsh@0.1.2-rc.1`，版本 2026.9.4）：
 
 - [@sinply](https://github.com/sinply)     PR [#18](https://github.com/zwb8926/deepseek-harness-vscode/pull/18)
 
