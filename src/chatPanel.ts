@@ -1,15 +1,16 @@
 /**
- * ChatPanel — owns the editor-area webviews that embed the dsh web GUI.
+ * ChatPanel — owns the editor-area webview that embeds the dsh web GUI.
  * The shared shell HTML lives in webviewHtml.ts.
  *
- * One WebviewPanel per conversation: clicking a session in the native
- * launcher tree opens (or reveals) its OWN editor tab, pinned to that
- * session via the `?session=` URL parameter — different sessions are
- * different pages, and they do not fight over the shared localStorage
- * (panel-inject ignores selection changes on pinned frames).
+ * ONE editor tab, switching conversations in place: clicking a session in the
+ * launcher (or in the GUI's own sidebar) re-renders this same panel pinned to
+ * that session via the `?session=` URL parameter. Opening a session never
+ * creates a second tab — the panel is revealed (brought to the front) and its
+ * `sessionId` is swapped, so the whole workflow stays in one window.
  *
- * A "default" panel (no pinned session, follows the GUI's current
- * selection) is used for the plain Open Chat command / settings.
+ * The panel created without a pinned session (the plain Open Chat command /
+ * settings flow) follows the GUI's current selection: it is seeded once with
+ * the last known session and then tracks `dsh.sessions.current`.
  */
 
 import * as vscode from "vscode";
@@ -26,7 +27,7 @@ export function vscodeThemeDark(): boolean {
 
 interface PanelHandle {
   panel: vscode.WebviewPanel;
-  /** The conversation this panel is pinned to ("" = default/follows GUI). */
+  /** The conversation this panel is pinned to ("" = follows the GUI). */
   sessionId: string;
   iframeReady: boolean;
   pendingMessage?: Record<string, unknown>;
@@ -36,7 +37,10 @@ interface PanelHandle {
   openSettings?: boolean;
 }
 
+/** The single editor tab every session is shown in. */
 const DEFAULT_KEY = "__default__";
+/** Title used when no conversation is pinned (or its title is unknown). */
+const DEFAULT_TITLE = "DeepSeek Harness";
 
 export class ChatPanel {
   private readonly panels = new Map<string, PanelHandle>();
@@ -49,33 +53,39 @@ export class ChatPanel {
     private readonly onOpen?: () => void
   ) {}
 
-  /** Open (or reveal) the default panel — follows the GUI's current session
-   * once seeded; used by Open Chat / status bar / settings.
+  /** Open (or reveal) the chat tab — the default, GUI-following view.
    * `seedSessionId` points the panel at a known-good conversation so the
    * editor never falls back to a stale blank "new session" view;
    * `openSettings` auto-opens the settings modal in the loaded page. */
   open(seedSessionId?: string, openSettings = false): void {
-    this.ensurePanel(DEFAULT_KEY, "DeepSeek Harness", "", { seedSessionId, openSettings });
+    this.ensurePanel(DEFAULT_KEY, DEFAULT_TITLE, "", { seedSessionId, openSettings });
   }
 
-  /** Convenience: open the default panel with the settings modal. */
+  /** Convenience: open the chat tab with the settings modal. */
   openSettings(seedSessionId?: string): void {
     this.open(seedSessionId, true);
   }
 
-  /** Open (or reveal) the panel pinned to one conversation. Different
-   * sessions get different editor tabs. */
+  /** Show one conversation in the SAME editor tab: reveal it and re-render it
+   * pinned to `sessionId`. No second tab is ever created. */
   openSession(sessionId: string, title?: string): void {
     if (sessionId === "") return;
-    // If a panel for this session exists, reveal it and refresh the title.
-    const existing = this.panels.get(sessionId);
+    const named = title !== undefined && title !== "" ? title : undefined;
+    const existing = this.panels.get(DEFAULT_KEY);
     if (existing !== undefined) {
-      if (title !== undefined && title !== "") existing.panel.title = title;
+      // Switching conversations on a live panel: swap the pin, drop any
+      // stale seed, and re-render so the iframe loads that session.
+      existing.sessionId = sessionId;
+      existing.seedSessionId = undefined;
+      existing.openSettings = false;
+      if (named !== undefined) existing.panel.title = named;
+      else if (existing.panel.title !== DEFAULT_TITLE) existing.panel.title = DEFAULT_TITLE;
       existing.panel.reveal();
       this.renderHandle(existing);
+      this.onOpen?.();
       return;
     }
-    this.ensurePanel(sessionId, title !== undefined && title !== "" ? title : "DeepSeek Harness", sessionId);
+    this.ensurePanel(DEFAULT_KEY, named ?? DEFAULT_TITLE, sessionId, undefined);
   }
 
   /** A panel is pinned to a session when `sessionId` is non-empty. */
@@ -142,12 +152,14 @@ export class ChatPanel {
     }
   }
 
-  /** Post a host message to ONE panel (default: the default panel).
-   * Queued until that panel's iframe reports ready. */
+  /** Post a host message to the chat tab. Queued until its iframe is ready.
+   * `sessionId`, when given, only delivers while that conversation is the one
+   * on screen — the panel is reused across sessions, so a message meant for a
+   * conversation the user has since switched away from must not land in it. */
   postToGui(message: Record<string, unknown>, sessionId?: string): void {
-    const key = sessionId !== undefined && sessionId !== "" ? sessionId : DEFAULT_KEY;
-    const handle = this.panels.get(key);
+    const handle = this.panels.get(DEFAULT_KEY);
     if (handle === undefined) return;
+    if (sessionId !== undefined && sessionId !== "" && handle.sessionId !== "" && handle.sessionId !== sessionId) return;
     handle.pendingMessage = { source: "dsh-vscode-host", ...message };
     if (handle.iframeReady) this.flushPending(handle);
   }
@@ -165,10 +177,13 @@ export class ChatPanel {
     }
   }
 
-  /** Update the editor tab title of one session's panel (rename flow). */
+  /** Update the editor tab title (rename flow). The single tab carries the
+   * title of the conversation it is showing, so a rename only touches it when
+   * that conversation is the one on screen. */
   setPanelTitle(sessionId: string, title: string): void {
-    const handle = this.panels.get(sessionId);
-    if (handle !== undefined && title !== "") handle.panel.title = title;
+    const handle = this.panels.get(DEFAULT_KEY);
+    if (handle === undefined || title === "") return;
+    if (handle.sessionId === sessionId || handle.sessionId === "") handle.panel.title = title;
   }
 
   /** True when at least one panel is open (for "open vs create" logic). */
