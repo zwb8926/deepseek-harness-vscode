@@ -301,23 +301,44 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
         openSettings();
       }
     });
+    // True only when the SETTINGS modal is on screen. Testing for any
+    // [role="dialog"] is not enough: other dialogs (the pre-release notice, the
+    // workspace picker, …) also carry that role and can stay mounted after
+    // being dismissed — which made every later settings click a no-op, i.e.
+    // "close the settings dialog once and the button stops working". The
+    // settings modal is the one holding the settings nav list.
+    var settingsDialogOpen = function () {
+      var dialogs = document.querySelectorAll('[role="dialog"]');
+      for (var i = 0; i < dialogs.length; i++) {
+        if (dialogs[i].querySelector('[class*="_navTitle"], [class*="_navCell"], [class*="_navList"]')) return true;
+      }
+      return false;
+    };
     // Settings requested from the launcher: click the (hidden) settings
     // trigger so the modal opens here, in the wide editor tab. Idempotent:
-    // if a settings dialog is already open, do nothing — the URL-param boot
+    // if the settings dialog is already open, do nothing — the URL-param boot
     // and the fallback host message can both request it. The retry budget is
     // generous (30s) because a COLD webview panel boots the whole app
     // (bundle + plugins) and React renders the trigger late.
     var openSettings = function () {
-      var tries = 100;
+      var tries = 100; // the trigger is not rendered yet during a cold boot
+      var clicks = 0; // bounded: never toggle a slow-opening modal shut
       var attempt = function () {
-        if (document.querySelector('[role="dialog"]')) return; // already open
+        if (settingsDialogOpen()) return; // already open
         var t = document.querySelector(settingsTrigger);
-        if (t) {
-          try { localStorage.removeItem(settingsKey); } catch (e2) {}
-          t.click();
+        if (t === null) {
+          if (--tries > 0) setTimeout(attempt, 300);
           return;
         }
-        if (--tries > 0) setTimeout(attempt, 300);
+        try { localStorage.removeItem(settingsKey); } catch (e2) {}
+        if (clicks >= 2) return;
+        clicks++;
+        t.click();
+        // Verify: a click fired right after a close can land while React is
+        // still tearing the previous tree down. attempt() re-checks the
+        // settings dialog before clicking again, so a merely SLOW open is never
+        // toggled shut.
+        setTimeout(attempt, 1200);
       };
       attempt();
     };
