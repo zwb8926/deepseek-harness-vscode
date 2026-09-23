@@ -58,20 +58,6 @@ button {
 button:hover { background: var(--vscode-button-hoverBackground); }
 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
 button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-.launcher { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
-.launcher iframe { flex: 1 1 0; min-height: 0; width: 100%; border: 0; background: var(--vscode-editor-background); }
-.launcher .status {
-  flex: none; font-size: 11px; line-height: 1.5; padding: 6px 8px; border-radius: 0;
-  border-top: 1px solid var(--vscode-widget-border, transparent);
-  background: var(--vscode-textBlockQuote-background);
-  color: var(--vscode-descriptionForeground);
-  word-break: break-all;
-}
-.launcher .hint {
-  flex: 1; display: flex; flex-direction: column; align-items: center;
-  justify-content: center; gap: 10px; text-align: center; padding: 16px;
-}
-.launcher .hint h1 { font-size: 13px; margin: 0; }
 `;
 
 export function shellHtml(body: string, dark: boolean): string {
@@ -210,16 +196,17 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 });`;
 
-/** Split-panel iframe source for one panel mode, when the frontend supports it.
- * When `sessionId` is given, the iframe is pinned to that conversation: the
- * panel-inject script reads `?session=` and forces `dsh.sessions.current`,
- * so each editor tab shows its OWN conversation (independent of the shared
- * localStorage that the GUI sidebar writes). `opts.seedSession` writes the
- * same selection ONCE but leaves the tab following the GUI (used by the
- * default/settings tab so it never falls back to a stale new-session view);
- * `opts.openSettings` makes panel-inject click the settings trigger at boot
- * (no host-message timing involved). */
-function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean, sessionId?: string, opts?: { seedSession?: string; openSettings?: boolean }): string {
+/** Split-panel iframe source for the editor shell (the center column), when the
+ * frontend supports it. When `sessionId` is given, the iframe is pinned to that
+ * conversation: the panel-inject script reads `?session=` and forces
+ * `dsh.sessions.current`, so the editor tab shows THAT conversation —
+ * independent of the shared localStorage that the GUI sidebar writes — and
+ * clicking another session simply re-renders this same tab with a new pin.
+ * `opts.seedSession` writes the same selection ONCE but leaves the tab
+ * following the GUI (used by the default/settings view so it never falls back
+ * to a stale new-session view); `opts.openSettings` makes panel-inject click
+ * the settings trigger at boot (no host-message timing involved). */
+function panelSrc(url: string, panel: "center", supported: boolean, sessionId?: string, opts?: { seedSession?: string; openSettings?: boolean }): string {
   if (!supported) return url;
   const sep = url.includes("?") ? "&" : "?";
   let src = `${url}${sep}dshPanel=${panel}`;
@@ -233,82 +220,6 @@ function panelSrc(url: string, panel: "sidebar" | "center", supported: boolean, 
 }
 
 /** Sidebar panel: the GUI's own sidebar column (sessions / workspaces). */
-export function launcherBody(info?: DshRuntimeInfo): string {
-  const status =
-    info?.state === "running" && info.url !== undefined
-      ? `<div class="status">${escapeHtml(info.url)}${info.external === true ? " (adopted)" : ""}</div>`
-      : `<div class="status">${stateLabelOf(info)}</div>`;
-  const project =
-    info?.project !== undefined && info.project !== ""
-      ? `<div class="status">📁 ${escapeHtml(info.project)}</div>`
-      : "";
-  if (info?.state === "running" && info.url !== undefined) {
-    // dsh 0.1.2+ browsers authenticate with a SameSite=Strict cookie that a
-    // cross-origin webview iframe cannot carry; the local GuiProxy injects it
-    // server-side, so the SPA embeds normally via guiUrl. No proxy → fall back
-    // to open-in-browser.
-    const embedBase = info.guiUrl ?? info.url;
-    if (info.browserAuth === true && info.guiUrl === undefined) {
-      return browserAuthFallback(info.url, status, project);
-    }
-    if (info.panelSupport === false) {
-      return `<div class="launcher">
-  <div class="hint">
-    <h1>DeepSeek Harness</h1>
-    <p>当前 dsh 前端不支持拆分面板（缺少 split-panel 补丁）。请更新 dsh 或检查日志。</p>
-    <p><code>${escapeHtml(info.url)}</code></p>
-  </div>
-  ${project}
-  ${status}
-</div>`;
-    }
-    const src = panelSrc(embedBase, "sidebar", true);
-    return `<div class="launcher">
-  ${guiIframeHtml(src, "DeepSeek Harness — sessions")}
-  ${project}
-  ${status}
-</div>`;
-  }
-  const hintText =
-    info?.state === "error"
-      ? `启动失败：${escapeHtml(info.detail ?? "未知错误")}`
-      : info?.state === "locating" || info?.state === "starting" || info?.state === "installing"
-        ? "服务正在启动…"
-        : "服务未运行。";
-  const hintActions =
-    info?.state === "error" || info?.state === "stopped" || info?.state === undefined || info?.state === "idle"
-      ? actionsHtml([["start", "启动服务"], ["open-browser", "浏览器打开"], ["show-logs", "查看日志"]])
-      : "";
-  return `<div class="launcher">
-  <div class="hint">
-    <h1>DeepSeek Harness</h1>
-    <p>${hintText}</p>
-    ${hintActions}
-  </div>
-  ${project}
-  ${status}
-</div>`;
-}
-
-function stateLabelOf(info?: DshRuntimeInfo): string {
-  switch (info?.state) {
-    case "running":
-      return "运行中";
-    case "locating":
-      return "正在定位 dsh CLI…";
-    case "installing":
-      return "正在安装…";
-    case "starting":
-      return "正在启动…";
-    case "error":
-      return "错误 — " + escapeHtml(info.detail ?? "未知");
-    case "stopped":
-      return "已停止";
-    default:
-      return "空闲";
-  }
-}
-
 /** Build the #stage body for one runtime state. When `sessionId` is given,
  * the embedded GUI is pinned to that conversation (`?session=` param).
  * `opts.seedSession` seeds the selection once without pinning; `opts.openSettings`
