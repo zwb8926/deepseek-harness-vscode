@@ -6,7 +6,7 @@
 
 本扩展**自行启动并管理 `dsh web` 服务**，并把 GUI **拆成两块**嵌入 VS Code
 
-本次更新（版本 2026.9.10）：
+本次更新（版本 2026.9.23）：
 
 - **内嵌 dsh 升级到 `@deepseek-ai/dsh@0.1.7-alpha.2`**（自 0.1.2-rc.1，依赖树与前端拆分补丁随包重建；0.1.7 线目前只有 alpha 构建 —— registry 的 `latest` / `next` 仍是 0.1.5-rc.2 / 0.1.5-rc.3，而 0.1.7-alpha.2 是所有已发布版本里最新的；本扩展不再联网自动更新，内置哪份就用哪份）
 - **0.1.7 复核结论（无需改代码）**：AppFrame 的 CSS-module 局部名逐字节未变（`frame` / `sidebarCol` / `centerCol` / `rightbarCol` / `handle` / `overlayLayer`，连 hash 前缀 `pI_x6G_` 都一样），仍是三栏；网格模板换成 `sidebar | minmax(400px,1fr) | minmax(0,rightbarMax)` 但列数不变；新增 `shell.leading` 插槽与**仅 macOS 生效**的 leading band/seat（Windows 上不渲染，且适配器按 `>` 直接子元素定位，多一个兄弟节点不受影响）与 `data-animating`。侧栏 `settingsArea`/`railMark`、会话行 `sessionRow`/`rowActions`/`role=treeitem`、设置弹窗 `overlay`/`mask`/`panel[role=dialog]`（仍内联在 `sidebar.settings` 子树）、`dsh.sessions.current` 的键与 `{sessionId, subagentAddress}` 载荷均未变（该 store 从 session-controller 挪到了 `dsh-client-ui-workspace`，键与 JSON 形状不变）。会话存储格式升到 **v4**：`dsh-session-format-v3-to-v4` 把已发布的 v3 会话**按 v4 读出、不回写存储里的 generation**，因此旧会话照常可用；但用 0.1.7 继续对话后新写入的 v4 轮次，旧版本 dsh 未必能读 —— 降级前留意
