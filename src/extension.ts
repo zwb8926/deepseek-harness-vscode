@@ -315,13 +315,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   async function openSettingsFlow(): Promise<void> {
     if (!manager.running) await ensureStarted();
-    // Single render carrying ?openSettings=1: the settings modal opens in the
-    // page itself at boot — no double-render, no host-message timing. The
-    // default panel is seeded with the last real session so the editor shows
-    // a conversation, not a new-session view.
+    // A page that is already loaded gets a host message over the live bridge —
+    // no re-render (the html would be byte-identical, so a reload is not even
+    // guaranteed); a cold tab is booted with ?openSettings=1. Logged so a
+    // failure can be traced to the delivery path instead of guessed at.
+    log(`settings: ${panel.hasLoadedPage ? "asking the live page to open the modal" : "booting the chat tab with openSettings=1"}`);
     panel.openSettings(lastSessionId === "" ? undefined : lastSessionId);
-    // Fallback: a host message after iframe-ready re-requests the modal if a
-    // later re-render (state change) clobbered the URL-param boot.
+    // Fallback for the cold path (the message is queued until iframe-ready, and
+    // delivered immediately when the page is already up).
     panel.postToGui({ type: "open-settings" });
   }
 

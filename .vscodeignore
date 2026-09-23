@@ -82,5 +82,21 @@ node_modules/@vscode/ripgrep-linux-x64/**
 # fixtures and tarball are noise.
 node_modules/node-addon-require-builtin/test/**
 
+# @deepseek-ai/libreoffice-kit-win32-x64: the LibreOffice runtime behind the
+# office-to-pdf skill. 325 MB unpacked — over half of the 0.1.7 dependency tree
+# and ~150 MB of the packaged vsix. It is an OPTIONAL dependency of
+# @deepseek-ai/libreoffice-kit, resolved lazily per platform on the first
+# conversion (lib/index.js: createRequire + "the optional package target for the
+# current process ABI"), so dropping it only costs office→pdf conversion; boot,
+# sessions, tools and the GUI are untouched. Verified by booting the server via
+# DshManager with this directory renamed aside: state=running, url resolved,
+# panelSupport=true, no error lines — and smoke stays green. Delete these lines
+# if document conversion inside the embedded dsh matters more than the size.
+node_modules/@deepseek-ai/libreoffice-kit-win32-x64/**
+node_modules/@deepseek-ai/libreoffice-kit-win32-arm64/**
+node_modules/@deepseek-ai/libreoffice-kit-darwin-x64/**
+node_modules/@deepseek-ai/libreoffice-kit-darwin-arm64/**
+node_modules/@deepseek-ai/libreoffice-kit-wasm/**
+
 # sharp-win32-x64 prebuild includes libvips native DLLs; keep win32-x64, drop others.
 

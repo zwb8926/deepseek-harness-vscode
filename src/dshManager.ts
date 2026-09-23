@@ -110,8 +110,11 @@ const WATCH_INTERVAL_MS = 5_000;
 const WATCH_FAILURES_TO_DIE = 2;
 /** Back-fill cooldown per session for the session/follow projection read. */
 const TITLE_BACKFILL_COOLDOWN_MS = 60_000;
-/** Max sessions whose missing projection is back-filled per list round. */
-const TITLE_BACKFILL_PER_ROUND = 3;
+/** Max sessions whose missing projection is back-filled per list round. Raised
+ * from 3: after an upgrade every projection is cold, and 3 per round left the
+ * launcher showing unlabeled rows for about a minute (each back-fill opens one
+ * short-lived mux connection, so this stays a small burst). */
+const TITLE_BACKFILL_PER_ROUND = 12;
 /** One-shot workspace baseline cache TTL — the launcher refreshes every few
  * seconds and each uncached call would open/close a mux stream. */
 const WORKSPACE_BASELINE_CACHE_MS = 5_000;
@@ -1159,7 +1162,9 @@ export class DshManager {
           const title = row?.title != null && row.title !== "" ? row.title : snippet;
           return {
             sessionId: it.sessionId,
-            title: title !== "" ? title : "未命名会话",
+            // A hit with neither title nor snippet is almost always an empty
+            // session (or one whose projection is cold) — 新会话, not a mystery.
+            title: title !== "" ? title : "新会话",
             cwd: row?.cwd,
             running: row?.running
           };
@@ -1179,7 +1184,10 @@ export class DshManager {
       .slice(0, 30)
       .map((s) => ({
         sessionId: s.sessionId,
-        title: s.title != null && s.title !== "" ? s.title : "未命名会话",
+        // Same rule as the launcher: without turns there is nothing the harness
+        // could have titled, so it is a new/empty session (a cold projection
+        // reports no turns either), not a genuinely untitled one.
+        title: s.title != null && s.title !== "" ? s.title : (s.blank !== false || s.turns === undefined || s.turns === 0 ? "新会话" : "未命名会话"),
         cwd: s.cwd,
         running: s.running
       }));

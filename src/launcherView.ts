@@ -317,6 +317,31 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
     renderBody(d);
   }
 
+  /**
+   * Display label for one session row (webview side).
+   *
+   * The harness titles a session from its first prompt, so a session with no
+   * turns has no title BY DESIGN — and a cold projection (no cached
+   * sessionStats/title, which is the state right after an upgrade) carries
+   * neither. Those are new/empty sessions, not mysteries: label them 新会话.
+   * Only a session that HAS turns and still has no title is genuinely untitled.
+   */
+  function sessionLabel(sess) {
+    if (sess.title != null && sess.title !== "") return sess.title;
+    var turns = typeof sess.turns === "number" ? sess.turns : 0;
+    return sess.blank !== false || turns === 0 ? "新会话" : "未命名会话";
+  }
+
+  /** A session row is listed only when it is not archived and not known-empty
+   * (blank, or a known turn count of zero). An UNKNOWN turn count — cold
+   * projection — must stay visible: hiding it would empty the whole list right
+   * after an upgrade. Running sessions always stay visible. */
+  function isListable(sess) {
+    if (sess.running === true) return true;
+    if (sess.blank === true) return false;
+    return sess.turns !== 0;
+  }
+
   function sessionRowHtml(sess, ttl) {
     return '<div class="row session-row" data-click="session" data-session="' + esc(sess.sessionId) + '" title="' + esc(ttl) + '">'
       + (sess.running ? icon("chatRunning", "green") : icon("chat", ""))
@@ -360,13 +385,15 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
     for (var w = 0; w < wsItems.length; w++) {
       var ws = wsItems[w];
       // Only REAL sessions are listed: archived ones are hidden (like the GUI)
-      // and BLANK ones (created but never used — no content yet) are hidden
-      // too. Workspaces with no visible sessions show nothing under them.
+      // and empty ones — blank, or a known turn count of zero — are hidden too.
+      // A COLD projection reports neither blank nor turns (right after an
+      // upgrade every session looks like that), so the turn count is only
+      // trusted when the harness actually reported one; see isListable().
       var visible = (ws.sessionIds || []).filter(function (id) {
         if (archived[id]) return false;
         if (!d.sessions) return false;
         for (var k = 0; k < d.sessions.length; k++) {
-          if (d.sessions[k].sessionId === id && d.sessions[k].blank !== true) return true;
+          if (d.sessions[k].sessionId === id) return isListable(d.sessions[k]);
         }
         return false;
       });
@@ -391,7 +418,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
         var sess = null;
         for (var k2 = 0; k2 < d.sessions.length; k2++) if (d.sessions[k2].sessionId === sid) { sess = d.sessions[k2]; break; }
         if (!sess) continue;
-        var ttl = sess.title != null && sess.title !== "" ? sess.title : sess.blank ? "新会话" : "未命名会话";
+        var ttl = sessionLabel(sess);
         out2 += sessionRowHtml(sess, ttl);
       }
       out2 += "</div></div>";
@@ -496,7 +523,11 @@ export class LauncherViewProvider implements vscode.WebviewViewProvider {
         ...this.data,
         sessions: (sessions ?? this.data.sessions).map((s) => ({
           sessionId: s.sessionId,
-          title: s.title != null && s.title !== "" ? s.title : s.blank ? "新会话" : "未命名会话",
+          // Same rule as the webview's sessionLabel(): a title-less session with
+          // no turns is a fresh/empty one (新会话), not a mystery. A cold
+          // projection reports no turns either, so it lands there too — which is
+          // what keeps an upgrade from painting the list with 未命名会话.
+          title: s.title != null && s.title !== "" ? s.title : (s.blank !== false || s.turns === undefined || s.turns === 0 ? "新会话" : "未命名会话"),
           updatedAt: s.updatedAt,
           running: s.running ?? false,
           blank: s.blank ?? true,
