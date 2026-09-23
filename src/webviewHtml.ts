@@ -60,6 +60,19 @@ button.secondary { background: var(--vscode-button-secondaryBackground); color: 
 button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
 `;
 
+/** The "no editor tab open yet" rule the shell injects into the page: it hides
+ * the GUI's row highlight until the extension confirms the tab is up. Kept as a
+ * TS constant and embedded with JSON.stringify — hand-written \\" escapes inside
+ * the shell template were emitted as BARE quotes, which turned the whole
+ * bootstrap script into a SyntaxError (so the iframe-ready handshake and the
+ * host→iframe forwarding never ran). */
+const NO_TAB_CSS =
+  'html.dsh-no-tab [class*="sessionRow"][class*="selected"],' +
+  'html.dsh-no-tab [class*="sessionRow"][aria-selected="true"] {' +
+  "background: transparent !important;" +
+  "color: inherit !important;" +
+  "box-shadow: none !important;}";
+
 export function shellHtml(body: string, dark: boolean): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -117,22 +130,24 @@ export function shellHtml(body: string, dark: boolean): string {
   // session- / settings-selected message from the iframe will be
   // paired with the extension opening the editor tab, after which
   // the extension posts "session-opened" to lift the no-highlight
-  // class.
-  const initial = document.createElement("script");
-  initial.textContent =
-    "document.documentElement.classList.add('dsh-no-tab');" +
-    "var s=document.createElement('style');" +
-    "s.id='dsh-no-tab';" +
-    "s.textContent='html.dsh-no-tab [class*=\"sessionRow\"][class*=\"selected\"],'+" +
-      "'html.dsh-no-tab [class*=\"sessionRow\"][aria-selected=\"true\"] {'+" +
-      "'background: transparent !important;'+" +
-      "'color: inherit !important;'+" +
-      "'box-shadow: none !important;}';" +
-    "document.head.appendChild(s);";
-  document.head.appendChild(initial);
-  const ready = document.createElement("script");
-  ready.textContent = IFRAME_READY_SCRIPT;
-  document.head.appendChild(ready);
+  // class. The rule text is interpolated as a JSON literal: building it
+  // through a nested script string lost one escaping level and made this
+  // whole bootstrap a SyntaxError.
+  document.documentElement.classList.add("dsh-no-tab");
+  const noTabStyle = document.createElement("style");
+  noTabStyle.id = "dsh-no-tab";
+  noTabStyle.textContent = ${JSON.stringify(NO_TAB_CSS)};
+  document.head.appendChild(noTabStyle);
+  // Report when the embedded GUI iframe has loaded so the extension knows it can
+  // deliver host messages (panel-inject must be running inside it first). This
+  // used to reference a build-time constant by name, which the browser cannot
+  // see — so the handshake never fired.
+  const frame = document.querySelector("iframe");
+  if (frame !== null) {
+    frame.addEventListener("load", function () {
+      try { vscode.postMessage({ source: "dsh-vscode-panel", type: "iframe-ready" }); } catch (err) {}
+    });
+  }
 })();
 </script>
 </body>
@@ -182,19 +197,6 @@ const IFRAME_ATTRS =
 function guiIframeHtml(src: string, title: string): string {
   return `<iframe title="${title}" src="${escapeHtml(src)}" ${IFRAME_ATTRS}></iframe>`;
 }
-
-/** Injected on every shell page: report when the embedded GUI iframe has
- * finished loading so the extension knows it can deliver host messages
- * (the panel-inject script must be running before a session-selected
- * message lands — clicks from the native launcher tree depend on this). */
-const IFRAME_READY_SCRIPT = `
-document.addEventListener("DOMContentLoaded", function () {
-  var frame = document.querySelector("iframe");
-  if (frame === null) return;
-  frame.addEventListener("load", function () {
-    try { vscode.postMessage({ source: "dsh-vscode-panel", type: "iframe-ready" }); } catch (e) {}
-  });
-});`;
 
 /** Split-panel iframe source for the editor shell (the center column), when the
  * frontend supports it. When `sessionId` is given, the iframe is pinned to that
