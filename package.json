@@ -170,7 +170,8 @@
     "patch-frontend": "node scripts/patch-frontend.mjs",
     "vscode:prepublish": "npm run compile && npm run patch-frontend",
     "package": "node scripts/package.mjs",
-    "smoke": "npm run compile && npm run patch-frontend && node out/smoke.js"
+    "smoke": "npm run compile && npm run patch-frontend && node out/smoke.js",
+    "verify": "npm run compile && npm run patch-frontend && node scripts/verify/run.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh": "0.1.7-alpha.2",
