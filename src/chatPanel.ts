@@ -35,6 +35,9 @@ interface PanelHandle {
   seedSessionId?: string;
   /** Auto-open the settings modal in the loaded page (URL param). */
   openSettings?: boolean;
+  /** Last html handed to the webview — re-assigning an identical string is not
+   * a reload, which matters for the iframe-ready handshake. */
+  lastHtml?: string;
 }
 
 /** The single editor tab every session is shown in. */
@@ -61,8 +64,23 @@ export class ChatPanel {
     this.ensurePanel(DEFAULT_KEY, DEFAULT_TITLE, "", { seedSessionId, openSettings });
   }
 
-  /** Convenience: open the chat tab with the settings modal. */
+  /** Show the settings modal in the chat tab.
+   *
+   * When the page is already loaded we ask it to open the modal over the live
+   * postMessage bridge — no re-render. Re-rendering with the same `openSettings=1`
+   * URL produced a byte-identical html, and depending on the webview host that
+   * either skipped the reload (leaving this message queued behind an
+   * `iframe-ready` that never came — the "settings only opens once" bug) or
+   * reloaded the whole GUI just to show a dialog. A cold panel still boots
+   * straight into the modal via the URL parameter. */
   openSettings(seedSessionId?: string): void {
+    const existing = this.panels.get(DEFAULT_KEY);
+    if (existing !== undefined && existing.iframeReady) {
+      existing.panel.reveal();
+      this.postToGui({ type: "open-settings" });
+      this.onOpen?.();
+      return;
+    }
     this.open(seedSessionId, true);
   }
 
@@ -191,22 +209,40 @@ export class ChatPanel {
     return this.panels.size > 0;
   }
 
+  /** True when the chat tab exists AND its page finished loading, i.e. host
+   * messages reach it over the live bridge instead of waiting for a boot. */
+  get hasLoadedPage(): boolean {
+    return this.panels.get(DEFAULT_KEY)?.iframeReady === true;
+  }
+
   private renderHandle(handle: PanelHandle, opts?: { seedSessionId?: string; openSettings?: boolean }): void {
     if (opts !== undefined) {
       if (opts.seedSessionId !== undefined) handle.seedSessionId = opts.seedSessionId;
       if (opts.openSettings === true) handle.openSettings = true;
     }
-    // A fresh html means a fresh iframe (and a fresh panel-inject
-    // listener) — wait for the next iframe-ready before delivering
-    // host messages. The pending message survives the re-render.
-    handle.iframeReady = false;
     // openSettings is one-shot: the settings modal opens on THIS load only,
     // so later re-renders (server state changes) do not reopen it.
     const openSettings = handle.openSettings === true;
     if (openSettings) handle.openSettings = false;
-    handle.panel.webview.html = shellHtml(
+    const html = shellHtml(
       stateBody(this.lastInfo, handle.sessionId, { seedSession: handle.seedSessionId, openSettings }),
       vscodeThemeDark()
     );
+    // Re-rendering the SAME html is not a reload: the webview host may drop
+    // byte-identical content, in which case no new document (and so no new
+    // iframe-ready) ever arrives. Keep the ready flag for that case and deliver
+    // anything queued to the page that is still live — otherwise a host message
+    // waits forever behind a handshake that will never fire.
+    const unchanged = handle.lastHtml === html;
+    handle.lastHtml = html;
+    if (unchanged) {
+      if (handle.iframeReady) this.flushPending(handle);
+      return;
+    }
+    // A fresh html means a fresh iframe (and a fresh panel-inject listener) —
+    // wait for the next iframe-ready before delivering host messages. The
+    // pending message survives the re-render.
+    handle.iframeReady = false;
+    handle.panel.webview.html = html;
   }
 }
