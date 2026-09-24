@@ -644,7 +644,11 @@ export class DshManager {
               };
               if (parsed.result?.ok === true) resolve(parsed.result.value);
               else {
-                this.opts.log(`rpc ${wire.endpoint} failed: ${parsed.result?.error?.message ?? text.slice(0, 200)}`);
+                const message = parsed.result?.error?.message ?? text.slice(0, 200);
+                this.opts.log(`rpc ${wire.endpoint} failed: ${message}`);
+                if (wire.endpoint === "settings/update" && /root Include entry/.test(message)) {
+                  void this.diagnoseSettingsWrite(wire.args);
+                }
                 resolve(undefined);
               }
             } catch {
@@ -1193,9 +1197,59 @@ export class DshManager {
       }));
   }
 
+  /** One-shot diagnostic for "the server rejects settings writes".
+   *
+   * A server can boot into a state where READS work but every settings write is
+   * rejected with "profile reload requires the root Include entry". Only a
+   * process started by the extension host has ever shown it, and every fresh
+   * process reproduces fine, so this records what the failing child was and asks
+   * whether a freshly spawned SIBLING accepts the very same write: the answer
+   * separates "this process is odd" from "this home/CLI is odd" without another
+   * round trip through the user. */
+  private settingsDiagDone = false;
+  private lastSpawnLine?: string;
+
+  private async diagnoseSettingsWrite(args: unknown): Promise<void> {
+    if (this.settingsDiagDone) return;
+    this.settingsDiagDone = true;
+    this.opts.log("settings: the running server REJECTS settings writes (reads keep working)");
+    this.opts.log(`settings: failing child was started as ${this.lastSpawnLine ?? "(unknown)"}`);
+    if (this.resolvedCliBin === undefined) {
+      this.opts.log("settings: no resolved CLI to probe with");
+      return;
+    }
+    const sibling = new DshManager({
+      ...this.opts,
+      port: 0,
+      autoRestart: false,
+      onInfo: () => {},
+      log: (line: string) => this.opts.log(`settings-probe: ${line}`)
+    });
+    try {
+      await sibling.start();
+      if (sibling.state !== "running") {
+        this.opts.log("settings-probe: a sibling server did not come up");
+        return;
+      }
+      const accepted = await sibling.rpc("settings.update", args);
+      this.opts.log(
+        accepted === undefined
+          ? "settings-probe: a FRESH sibling rejects the same write too → the home/CLI is the difference, not this process"
+          : "settings-probe: a FRESH sibling ACCEPTS the same write → this process booted broken; restarting the service heals it"
+      );
+    } catch (err) {
+      this.opts.log(`settings-probe: failed: ${String(err)}`);
+    } finally {
+      try {
+        await sibling.stop();
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+
   /** Apply the dsh UI theme preference (ui-theme.preference) via the settings API. */
-  async applyTheme(preference: "light" | "dark" | "system"): Promise<boolean> {
-    const value = await this.rpc("settings.update", { ns: "ui-theme", patch: { preference } });
+  async applyTheme(preference: "light" | "dark" | "system"): Promise<boolean> {    const value = await this.rpc("settings.update", { ns: "ui-theme", patch: { preference } });
     if (value === undefined) {
       this.opts.log(`applyTheme: could not set ui-theme.preference=${preference}`);
       return false;
@@ -1271,12 +1325,37 @@ export class DshManager {
     this.setState("starting");
     const args = ["web", "--host", "127.0.0.1", "--port", String(this.opts.port), "--no-open", ...(this.opts.extraArgs ?? [])];
     const env: NodeJS.ProcessEnv = { ...process.env, ...(cli.env ?? {}) };
-    if (this.opts.home !== undefined && this.opts.home !== "") env.DSH_HOME = this.opts.home;
-    this.opts.log(`spawn: ${cli.cmd} ${args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`);
-    if (cli.cwd !== undefined) {
-      this.opts.log(`       cwd: ${cli.cwd}`);
-      this.opts.log(`       DSH_HOME: ${env.DSH_HOME ?? "(inherit)"}`);
+    // Give the child an EXPLICIT, consistent environment instead of whatever the
+    // extension host happens to carry. A stale DSH_PROFILE_DIR (e.g. inherited
+    // because the editor was launched from a DSH session) or a bootstrap
+    // DSH_HOME sends dsh down a profile path whose root Include entry never gets
+    // registered, which shows up as settings writes being rejected with
+    // "profile reload requires the root Include entry" while reads keep working.
+    const home = this.opts.home !== undefined && this.opts.home !== "" ? this.opts.home : env.DSH_HOME;
+    if (home !== undefined && home !== "") {
+      if (env.DSH_HOME !== home) this.opts.log(`       DSH_HOME: ${env.DSH_HOME ?? "(inherit)"} -> ${home}`);
+      env.DSH_HOME = home;
+      const profileDir = path.join(home, "profiles", "web");
+      if (existsSync(profileDir)) {
+        if (env.DSH_PROFILE_DIR !== undefined && env.DSH_PROFILE_DIR !== profileDir) {
+          this.opts.log(`       DSH_PROFILE_DIR: ${env.DSH_PROFILE_DIR} -> ${profileDir}`);
+        }
+        env.DSH_PROFILE = env.DSH_PROFILE ?? "web";
+        env.DSH_PROFILE_DIR = profileDir;
+      }
     }
+    if (env.NODE_OPTIONS !== undefined) {
+      this.opts.log(`       dropping inherited NODE_OPTIONS for the child: ${env.NODE_OPTIONS}`);
+      delete env.NODE_OPTIONS;
+    }
+    this.opts.log(`spawn: ${cli.cmd} ${args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`);
+    this.lastSpawnLine = `${cli.cmd} ${args.join(" ")} (cwd=${this.opts.cwd ?? os.homedir()})`;
+    this.opts.log(
+      `       cwd: ${this.opts.cwd ?? os.homedir()} | child env: ` +
+        ["DSH_HOME", "DSH_PROFILE", "DSH_PROFILE_DIR", "NODE_PATH", "ELECTRON_RUN_AS_NODE"]
+          .map((k) => `${k}=${env[k] ?? "-"}`)
+          .join(" ")
+    );
 
     let child: ChildProcess;
     try {
