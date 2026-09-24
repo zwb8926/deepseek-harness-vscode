@@ -1,6 +1,12 @@
 .vscode/**
 .ssh/**
 src/**
+# scripts/ is build/dev tooling: patch-frontend + package run from a checkout and
+# scripts/verify/ is the regression suite (`npm run verify`). Nothing under it is
+# read at runtime. NOTE: vsce still ships the two files package.json's own
+# scripts reference (scripts/patch-frontend.mjs, scripts/package.mjs, ~3.5 KB) —
+# it force-includes those, which is harmless.
+scripts/**
 out/**/*.map
 **/*.ts
 tsconfig.json
