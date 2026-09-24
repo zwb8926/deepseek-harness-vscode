@@ -17,6 +17,7 @@ npm run verify -- http://127.0.0.1:3080
 | `shell-check` | 离线 | 生成的外壳页**真的会执行**：bootstrap 生效（`dsh-no-tab` + 注入样式）、`iframe-ready` 握手送达、无 JS 报错 |
 | `adopt-unpatched` | 离线 | **接管未打补丁的外部服务**：裸起服务 → 确认页面无适配器 → manager 接管后运行时打补丁、`panelSupport=true` |
 | `feature-check` | 离线 | 工作区/会话创建、重命名、**标题投影回填**、归档、主题、搜索回退；空白会话不可分叉（harness 规则） |
+| `notice` | 离线 | **设置写入链路 + 内测声明确认**：新会话会弹声明（对照）→ `settings/update` 接受确认并写到 `profiles/web/cordis.patch.yml` → 新会话不再弹 → 重启后写入依旧正常 |
 | `package-check` | 离线 | **打包产物**：版本、内置 dsh、适配器与仓库逐字节一致、LibreOffice payload 已裁掉，并**从解压树真启动一次 dsh** |
 | `panels` | 实时 | **分屏不变式**（真浏览器）：center = 侧栏列被涂抹隐藏且会话占满宽度、设置弹窗仍能盖在上面打开/关闭；sidebar = 只留侧栏、会话/详情列归零 |
 | `pin` | 实时 | **每标签页会话固定**：`?session=` 在启动前写入 `dsh.sessions.current`，且应用确实开在该会话（`document.title` 跟随） |

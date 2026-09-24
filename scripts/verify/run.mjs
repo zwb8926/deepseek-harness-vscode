@@ -12,6 +12,7 @@
 //            shell-check        the shell page runs + iframe-ready handshake
 //            adopt-unpatched    adopting an unpatched server patches its frontend
 //            feature-check      workspace/session/theme lifecycle through the API
+//            notice             settings write path + pre-release notice ack
 //            package-check      the built vsix: contents + boot from the extracted tree
 //   live     panels             the split-panel invariant in both panel modes
 //            pin                per-tab session pinning (?session=)
@@ -22,7 +23,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { REPO, dshHome, forgeCookie, originArg, rpc } from "./harness.mjs";
 
-const OFFLINE = ["panel-tabs", "settings-flow", "shell-check", "adopt-unpatched", "feature-check", "package-check"];
+const OFFLINE = ["panel-tabs", "settings-flow", "shell-check", "adopt-unpatched", "feature-check", "notice", "package-check"];
 const LIVE = ["panels", "pin", "titles"];
 
 const argv = process.argv.slice(2);
