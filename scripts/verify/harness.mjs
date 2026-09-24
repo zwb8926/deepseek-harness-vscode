@@ -136,11 +136,23 @@ export async function rpc(origin, cookie, method, args) {
   return (await res.json())?.result;
 }
 
+/** A child environment like a plain editor host's: no inherited DSH_* profile
+ * plumbing and no NODE_OPTIONS. Suites must not depend on the ambient DSH
+ * session they happen to be launched from — inheriting DSH_PROFILE_DIR from it
+ * is exactly how a "the server cannot write settings" bug hides from a test. */
+export function cleanEnv(extra = {}) {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) {
+    if (k.toUpperCase().startsWith("DSH") || k === "NODE_OPTIONS") delete env[k];
+  }
+  return { ...env, ...extra };
+}
+
 /** Start the bundled dsh CLI in a child process; resolves an object with the
  * child, the parsed URL and a stop() helper. */
 export async function startDsh({ home, port, cli, cwd, timeoutMs = 70_000 }) {
   const child = spawn(process.execPath, [cli, "web", "--host", "127.0.0.1", "--port", String(port), "--no-open"], {
-    env: { ...process.env, DSH_HOME: home },
+    env: cleanEnv({ DSH_HOME: home }),
     cwd: cwd ?? REPO,
     stdio: ["ignore", "pipe", "pipe"],
   });

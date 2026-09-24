@@ -1271,12 +1271,36 @@ export class DshManager {
     this.setState("starting");
     const args = ["web", "--host", "127.0.0.1", "--port", String(this.opts.port), "--no-open", ...(this.opts.extraArgs ?? [])];
     const env: NodeJS.ProcessEnv = { ...process.env, ...(cli.env ?? {}) };
-    if (this.opts.home !== undefined && this.opts.home !== "") env.DSH_HOME = this.opts.home;
-    this.opts.log(`spawn: ${cli.cmd} ${args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`);
-    if (cli.cwd !== undefined) {
-      this.opts.log(`       cwd: ${cli.cwd}`);
-      this.opts.log(`       DSH_HOME: ${env.DSH_HOME ?? "(inherit)"}`);
+    // Give the child an EXPLICIT, consistent environment instead of whatever the
+    // extension host happens to carry. A stale DSH_PROFILE_DIR (e.g. inherited
+    // because the editor was launched from a DSH session) or a bootstrap
+    // DSH_HOME sends dsh down a profile path whose root Include entry never gets
+    // registered, which shows up as settings writes being rejected with
+    // "profile reload requires the root Include entry" while reads keep working.
+    const home = this.opts.home !== undefined && this.opts.home !== "" ? this.opts.home : env.DSH_HOME;
+    if (home !== undefined && home !== "") {
+      if (env.DSH_HOME !== home) this.opts.log(`       DSH_HOME: ${env.DSH_HOME ?? "(inherit)"} -> ${home}`);
+      env.DSH_HOME = home;
+      const profileDir = path.join(home, "profiles", "web");
+      if (existsSync(profileDir)) {
+        if (env.DSH_PROFILE_DIR !== undefined && env.DSH_PROFILE_DIR !== profileDir) {
+          this.opts.log(`       DSH_PROFILE_DIR: ${env.DSH_PROFILE_DIR} -> ${profileDir}`);
+        }
+        env.DSH_PROFILE = env.DSH_PROFILE ?? "web";
+        env.DSH_PROFILE_DIR = profileDir;
+      }
     }
+    if (env.NODE_OPTIONS !== undefined) {
+      this.opts.log(`       dropping inherited NODE_OPTIONS for the child: ${env.NODE_OPTIONS}`);
+      delete env.NODE_OPTIONS;
+    }
+    this.opts.log(`spawn: ${cli.cmd} ${args.map((a) => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`);
+    this.opts.log(
+      `       cwd: ${this.opts.cwd ?? os.homedir()} | child env: ` +
+        ["DSH_HOME", "DSH_PROFILE", "DSH_PROFILE_DIR", "NODE_PATH", "ELECTRON_RUN_AS_NODE"]
+          .map((k) => `${k}=${env[k] ?? "-"}`)
+          .join(" ")
+    );
 
     let child: ChildProcess;
     try {
