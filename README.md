@@ -23,13 +23,23 @@
 - 若重启后仍被拒：扩展会自己给出判定 —— 输出面板里会出现
   `settings: the running server REJECTS settings writes` 与
   `settings-probe: a FRESH sibling …`。兄弟进程**接受**同一写入 ⇒ 是那个进程启坏了（再重启）；兄弟进程**也拒绝** ⇒ 问题在 home/CLI 侧，而不是某个进程的状态，此时可按下面的方式手动落设置。
-- 手动补设置（可选，dsh 自己写的就是这个格式）：把要改的项写进 `~/.dsh/profiles/web/cordis.patch.yml` 后重启服务即可生效，例如让声明不再出现：
+- 手动落设置（**推荐的兜底**）：把要改的项写成 `~/.dsh/profiles/web/cordis.patch.yml` 里的一条补丁，然后重启服务即生效。文件本身是一行 `[]`（空数组）时，用这个整份内容替换：
   ```yaml
+  # 一条补丁 = id 指向某个插件，config 覆盖它的设置命名空间
+  - id: ui-theme
+    name: "@deepseek-ai/dsh-client-ui-theme"
+    config:
+      preference: dark          # light | dark | system —— 就是设置面板里的主题
   - id: ui-settings-general
     name: "@deepseek-ai/dsh-client-ui-settings-general"
     config:
-      welcomeNoticeVersion: 2026-08-13.1
+      welcomeNoticeVersion: 2026-08-13.1   # 让「内测声明」不再出现
   ```
+  - `id` / `name` 用插件 id 与其包名。已核实的两个：`ui-theme` → `@deepseek-ai/dsh-client-ui-theme`、`ui-settings-general` → `@deepseek-ai/dsh-client-ui-settings-general`；`config` 下的键就是设置面板里的字段名。
+  - **全部 id ↔ 包名对照**可从随包发布的 `node_modules/@deepseek-ai/dsh-web-app/cordis.patch.yml` 里查到（每条 `- id: … / name: …`）；现成的命名空间与字段可从 `~/.dsh/settings.yaml.imported` 看到（0.1.7 迁移前的旧设置文件，结构就是 `命名空间: { 字段: 值 }`）。
+  - 改完记得**重启服务**（补丁在启动时读取）。
+  - 值不要加引号也可以；中文/特殊字符请使用引号。
+- 上游问题：这条链路在 dsh 侧（profile reload 状态），本仓库已整理了一份最小复现报告，见 [docs/upstream-profile-reload.md](docs/upstream-profile-reload.md)。
 - 附带说明：0.1.7 把确认字段的命名空间从 `ui-onboarding` 改成了 `ui-settings-general`，所以**旧版本点过「继续」也会再弹一次**，这属于正常现象（点一次即可）。
 - 与分栏适配无关：不带 `?dshPanel` 参数的原生 GUI 表现完全相同（`npm run verify -- --only notice` 会跑这条链路的对照与验收）。
 

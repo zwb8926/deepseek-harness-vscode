@@ -7,6 +7,9 @@ src/**
 # scripts reference (scripts/patch-frontend.mjs, scripts/package.mjs, ~3.5 KB) —
 # it force-includes those, which is harmless.
 scripts/**
+# docs/ is reference material for the repo (e.g. the upstream report); the
+# extension's own README is what ships in the package.
+docs/**
 out/**/*.map
 **/*.ts
 tsconfig.json
