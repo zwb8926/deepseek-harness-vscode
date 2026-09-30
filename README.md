@@ -6,9 +6,11 @@
 
 本扩展**自行启动并管理 `dsh web` 服务**，并把 GUI **拆成两块**嵌入 VS Code
 
-本次更新（版本 2026.9.24）：
+本次更新（版本 2026.9.30）：
 
-- **内嵌 dsh 升级到 `@deepseek-ai/dsh@0.1.7-rc.1`**（自 0.1.7-alpha.2：0.1.7 线从 alpha 进入 **RC**，registry 上就是 `next` 标签；仍无稳定版，`latest` 还是 0.1.5-rc.3。依赖树 277 个包，前端拆分补丁随包重建；本扩展不联网自动更新，内置哪份就用哪份）
+- **内嵌 dsh 升级到 `@deepseek-ai/dsh@0.2.0-rc.2`**（自 0.1.7-rc.1，跨到 **0.2.0** 线；该版本同时是 registry 的 `latest` 与 `next`。依赖树 277 → **288** 个包，前端拆分补丁随包重建；本扩展不联网自动更新，内置哪份就用哪份）
+- **0.2.0 兼容性复核：无需改代码**。适配器依赖的挂点全部健在（`_sidebarCol` / `_centerCol` / `_rightbarCol` / `_settingsArea` / `_railMark` / `_navCell` / `_navTitle` / `_sessionRow` / `_rowActions` / `_overlay` / dockkit 条带，AppFrame 样式模块前缀仍是 `pI_x6G_`，`dsh.sessions.current` 键与载荷不变）
+- **验证**：`npm run smoke` 与 `npm run verify`（7 个离线套件 + 3 个实时套件）**对内置的 0.2.0-rc.2 全绿** —— 单标签页切换、设置反复开关、外壳执行与握手、接管未打补丁的服务、工作区/会话/主题等一整套 API、设置写入链路与内测声明确认、打包产物校验并从解压树启动、两种分屏不变式（真浏览器）、每标签页会话固定、56 条冷投影会话下不再出现「未命名会话」
 
 ## 已知问题 / 排查
 
