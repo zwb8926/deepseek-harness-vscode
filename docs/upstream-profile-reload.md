@@ -1,5 +1,9 @@
 # Upstream report draft: settings writes rejected — "profile reload requires the root Include entry"
 
+> **To file it:** the paste-ready issue (title + body + the `gh` command) is in
+> [`upstream-issue-body.md`](upstream-issue-body.md). This file is the long form — the full
+> reproduction matrix and the reasoning behind each row.
+
 A minimal, evidence-backed report for the dsh repository
 (`https://github.com/deepseek-ai/deepseek-harness`, package `@deepseek-ai/dsh`).
 Observed while embedding `dsh web` in a VS Code / Cursor extension. Everything
