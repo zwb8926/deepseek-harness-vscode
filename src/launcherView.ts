@@ -58,7 +58,7 @@ export interface LauncherData {
 /** Webview → extension events. */
 export type LauncherEvent =
   | { type: "reveal" }
-  | { type: "click"; kind: "status" | "new-session" | "settings" | "session" | "workspace"; sessionId?: string; workspaceId?: string }
+  | { type: "click"; kind: "status" | "new-session" | "settings" | "plugins" | "session" | "workspace"; sessionId?: string; workspaceId?: string }
   | { type: "action"; action: "rename" | "fork" | "archive"; sessionId: string; title?: string }
   | { type: "action"; action: "new-session"; workspaceId: string }
   | { type: "action"; action: "rename-workspace" | "delete-workspace"; workspaceId: string; title?: string }
@@ -72,6 +72,7 @@ const CODICONS: Record<string, string> = {
   zap: "codicon-zap",
   plus: "codicon-plus",
   gear: "codicon-gear",
+  extensions: "codicon-extensions",
   folder: "codicon-folder",
   chat: "codicon-comment",
   chatRunning: "codicon-comment-discussion",
@@ -189,6 +190,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
   <div class="toolbar">
     <input id="searchInput" class="search-input" type="text" placeholder="搜索会话…" spellcheck="false">
     <button class="toolbtn" id="btnNewSession" data-click="new-session" title="新建会话"></button>
+    <button class="toolbtn" id="btnPlugins" data-click="plugins" title="插件"></button>
     <button class="toolbtn" id="btnSettings" data-click="settings" title="设置"></button>
   </div>
   <div id="body"><div class="empty">加载中…</div></div>
@@ -203,6 +205,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
   var bodyEl = document.getElementById("body");
   var searchInput = document.getElementById("searchInput");
   var btnNewSession = document.getElementById("btnNewSession");
+  var btnPlugins = document.getElementById("btnPlugins");
   var btnSettings = document.getElementById("btnSettings");
   var expanded = {}; // workspaceId -> true (default all expanded)
   var searchQuery = "";
@@ -280,6 +283,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
   });
   // Toolbar icon buttons (no text) get their glyphs wired once.
   btnNewSession.innerHTML = icon("plus", "green");
+  btnPlugins.innerHTML = icon("extensions", "");
   btnSettings.innerHTML = icon("gear", "");
 
   // Search box: debounced, connected to the harness session search.

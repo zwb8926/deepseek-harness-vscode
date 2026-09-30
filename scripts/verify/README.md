@@ -21,6 +21,7 @@ npm run verify -- http://127.0.0.1:3080
 | `package-check` | 离线 | **打包产物**：版本、内置 dsh、适配器与仓库逐字节一致、LibreOffice payload 已裁掉，并**从解压树真启动一次 dsh** |
 | `panels` | 实时 | **分屏不变式**（真浏览器）：center = 侧栏列被涂抹隐藏且会话占满宽度、设置弹窗仍能盖在上面打开/关闭；sidebar = 只留侧栏、会话/详情列归零 |
 | `pin` | 实时 | **每标签页会话固定**：`?session=` 在启动前写入 `dsh.sessions.current`，且应用确实开在该会话（`document.title` 跟随） |
+| `plugins` | 实时 | **「插件」入口**（0.2.0 的 `sidebar.panellist` 面板）：冷启动 `&openPanel=plugins` 打开插件管理器、切走后用宿主消息**可再次打开**（连做两轮），且不被无关弹窗挡住；服务老于 0.2.0 时报 skip |
 | `titles` | 实时* | **冷投影下的标题**：复制 `$DSH_HOME/sessions` 成冷库 → 用**生成产物里抠出来的** `sessionLabel`/`isListable` 判定，确保不再出现「未命名会话」；回填后投影转热 |
 
 \* `titles` 不访问线上服务，只需要一个有会话的 home（默认 `~/.dsh`）。

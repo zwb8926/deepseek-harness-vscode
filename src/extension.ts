@@ -326,6 +326,15 @@ export function activate(context: vscode.ExtensionContext): void {
     panel.postToGui({ type: "open-settings" });
   }
 
+  /** 插件: show the GUI's plugin manager (0.2.0 registers it as the `plugins`
+   * sidebar panel) in the editor tab — same two delivery paths as settings. */
+  async function openPluginsFlow(): Promise<void> {
+    if (!manager.running) await ensureStarted();
+    log(`plugins: ${panel.hasLoadedPage ? "asking the live page to switch panel" : "booting the chat tab with openPanel=plugins"}`);
+    panel.openPanel("plugins", lastSessionId === "" ? undefined : lastSessionId);
+    panel.postToGui({ type: "open-panel", panel: "plugins" });
+  }
+
   /** 重命名会话: input box → sessions.rename RPC. */
   async function renameSessionFlow(sessionId: string, currentTitle?: string): Promise<void> {
     const value = await vscode.window.showInputBox({
@@ -434,6 +443,9 @@ export function activate(context: vscode.ExtensionContext): void {
             break;
           case "settings":
             await openSettingsFlow();
+            break;
+          case "plugins":
+            await openPluginsFlow();
             break;
           case "session":
             if (event.sessionId !== undefined) await openSessionFlow(event.sessionId);

@@ -16,6 +16,7 @@
 //            package-check      the built vsix: contents + boot from the extracted tree
 //   live     panels             the split-panel invariant in both panel modes
 //            pin                per-tab session pinning (?session=)
+//            plugins            the 插件 panel opens and reopens (0.2.0 panel list)
 //            titles             cold-store launcher labels (copies $DSH_HOME/sessions)
 
 import { spawn } from "node:child_process";
@@ -24,7 +25,7 @@ import path from "node:path";
 import { REPO, dshHome, forgeCookie, originArg, rpc } from "./harness.mjs";
 
 const OFFLINE = ["panel-tabs", "settings-flow", "shell-check", "adopt-unpatched", "feature-check", "notice", "package-check"];
-const LIVE = ["panels", "pin", "titles"];
+const LIVE = ["panels", "pin", "plugins", "titles"];
 
 const argv = process.argv.slice(2);
 const offlineOnly = argv.includes("--offline");

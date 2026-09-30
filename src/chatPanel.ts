@@ -35,6 +35,9 @@ interface PanelHandle {
   seedSessionId?: string;
   /** Auto-open the settings modal in the loaded page (URL param). */
   openSettings?: boolean;
+  /** Auto-select one of the GUI's sidebar panels (e.g. `plugins`) in the loaded
+   * page — the panel-inject adapter clicks that panel's row (URL param). */
+  openPanel?: string;
   /** Last html handed to the webview — re-assigning an identical string is not
    * a reload, which matters for the iframe-ready handshake. */
   lastHtml?: string;
@@ -59,9 +62,25 @@ export class ChatPanel {
   /** Open (or reveal) the chat tab — the default, GUI-following view.
    * `seedSessionId` points the panel at a known-good conversation so the
    * editor never falls back to a stale blank "new session" view;
-   * `openSettings` auto-opens the settings modal in the loaded page. */
-  open(seedSessionId?: string, openSettings = false): void {
-    this.ensurePanel(DEFAULT_KEY, DEFAULT_TITLE, "", { seedSessionId, openSettings });
+   * `openSettings` auto-opens the settings modal in the loaded page;
+   * `openPanel` auto-selects one of the GUI's sidebar panels (e.g. `plugins`). */
+  open(seedSessionId?: string, openSettings = false, openPanel?: string): void {
+    this.ensurePanel(DEFAULT_KEY, DEFAULT_TITLE, "", { seedSessionId, openSettings, openPanel });
+  }
+
+  /** Show one of the GUI's sidebar panels (e.g. `plugins`, the plugin manager)
+   * in the chat tab — same two paths as openSettings(): a live page gets a host
+   * message, a cold tab boots with `&openPanel=<id>`. */
+  openPanel(panel: string, seedSessionId?: string): void {
+    if (panel === "") return;
+    const existing = this.panels.get(DEFAULT_KEY);
+    if (existing !== undefined && existing.iframeReady) {
+      existing.panel.reveal();
+      this.postToGui({ type: "open-panel", panel });
+      this.onOpen?.();
+      return;
+    }
+    this.open(seedSessionId, false, panel);
   }
 
   /** Show the settings modal in the chat tab.
@@ -107,7 +126,12 @@ export class ChatPanel {
   }
 
   /** A panel is pinned to a session when `sessionId` is non-empty. */
-  private ensurePanel(key: string, title: string, sessionId: string, opts?: { seedSessionId?: string; openSettings?: boolean }): void {
+  private ensurePanel(
+    key: string,
+    title: string,
+    sessionId: string,
+    opts?: { seedSessionId?: string; openSettings?: boolean; openPanel?: string }
+  ): void {
     const existing = this.panels.get(key);
     if (existing !== undefined) {
       existing.panel.reveal();
@@ -215,17 +239,20 @@ export class ChatPanel {
     return this.panels.get(DEFAULT_KEY)?.iframeReady === true;
   }
 
-  private renderHandle(handle: PanelHandle, opts?: { seedSessionId?: string; openSettings?: boolean }): void {
+  private renderHandle(handle: PanelHandle, opts?: { seedSessionId?: string; openSettings?: boolean; openPanel?: string }): void {
     if (opts !== undefined) {
       if (opts.seedSessionId !== undefined) handle.seedSessionId = opts.seedSessionId;
       if (opts.openSettings === true) handle.openSettings = true;
+      if (opts.openPanel !== undefined && opts.openPanel !== "") handle.openPanel = opts.openPanel;
     }
-    // openSettings is one-shot: the settings modal opens on THIS load only,
-    // so later re-renders (server state changes) do not reopen it.
+    // Both are one-shot: the modal / panel opens on THIS load only, so later
+    // re-renders (server state changes) do not reopen them.
     const openSettings = handle.openSettings === true;
     if (openSettings) handle.openSettings = false;
+    const openPanel = handle.openPanel;
+    if (openPanel !== undefined) handle.openPanel = undefined;
     const html = shellHtml(
-      stateBody(this.lastInfo, handle.sessionId, { seedSession: handle.seedSessionId, openSettings }),
+      stateBody(this.lastInfo, handle.sessionId, { seedSession: handle.seedSessionId, openSettings, openPanel }),
       vscodeThemeDark()
     );
     // Re-rendering the SAME html is not a reload: the webview host may drop
