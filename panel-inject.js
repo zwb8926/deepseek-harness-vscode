@@ -163,6 +163,56 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   var style = document.createElement('style');
   style.textContent = alwaysOn;
   document.head.appendChild(style);
+  // The pre-release notice ("预览版说明" / "Preview Notice", previously "内测声明")
+  // is dismissed only by a SERVER-side settings write. On a deployment whose
+  // writes are rejected it can never be closed, so the embedded UI hides it: the
+  // dialog is purely informational, and the extension acknowledges it in the
+  // profile patch layer instead. This runs before the panel-mode gate so the
+  // full-GUI fallback path is covered too.
+  var noticeTitles = ['预览版说明', 'Preview Notice', '内测声明', 'Beta Notice'];
+  var noticeClicked = false;
+  var hidePreviewNotice = function () {
+    var dialogs = document.querySelectorAll('[role="dialog"]');
+    for (var i = 0; i < dialogs.length; i++) {
+      var d = dialogs[i];
+      var label = (d.getAttribute('aria-label') || '').trim();
+      var text = (d.innerText || '').trim();
+      var hit = false;
+      for (var j = 0; j < noticeTitles.length; j++) {
+        if (label === noticeTitles[j] || text.indexOf(noticeTitles[j]) === 0) { hit = true; break; }
+      }
+      if (!hit) continue;
+      // Best effort, once: a healthy server records the acknowledgement, and a
+      // broken one answers with the retry copy we are about to hide.
+      if (!noticeClicked) {
+        noticeClicked = true;
+        var noticeButton = d.querySelector('button');
+        if (noticeButton !== null) { try { noticeButton.click(); } catch (e5) {} }
+      }
+      d.style.setProperty('display', 'none', 'important');
+      // Hide a full-viewport mask above it as well, so nothing swallows clicks.
+      var up = d.parentElement;
+      for (var k = 0; k < 3 && up !== null && up !== document.body; k++) {
+        var upStyle = window.getComputedStyle(up);
+        var upRect = up.getBoundingClientRect();
+        if (upStyle.position === 'fixed' && upRect.width >= window.innerWidth * 0.9 && upRect.height >= window.innerHeight * 0.9) {
+          up.style.setProperty('display', 'none', 'important');
+        }
+        up = up.parentElement;
+      }
+      return true;
+    }
+    return false;
+  };
+  hidePreviewNotice();
+  try {
+    new MutationObserver(function () { hidePreviewNotice(); }).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e6) { /* no MutationObserver — the sweeps below still cover it */ }
+  var noticeSweeps = 0;
+  var noticeTimer = setInterval(function () {
+    hidePreviewNotice();
+    if (++noticeSweeps >= 40) clearInterval(noticeTimer);
+  }, 500);
   if (panel !== 'sidebar' && panel !== 'center') return;
   document.documentElement.setAttribute('data-dsh-panel', panel);
   // The AppFrame grid owns the three columns. Other rc.1 UI modules reuse the
@@ -299,6 +349,8 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
         location.reload();
       } else if (d.type === 'open-settings') {
         openSettings();
+      } else if (d.type === 'open-panel') {
+        openPanel(d.panel);
       }
     });
     // True only when the SETTINGS modal is on screen. Testing for any
@@ -350,6 +402,56 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
     // at boot — the extension no longer depends on the host-message bridge
     // (iframe-ready timing) for this.
     if (qs.get('openSettings') === '1') openSettings();
+
+    // ---------------------------------------------------------------- panels
+    // 0.2.0 puts extra surfaces in the sidebar's panel list (the plugin manager
+    // registers itself into the sidebar.panellist slot as "plugins"). The
+    // native launcher lists the same surfaces, so it opens them the same way it
+    // opens settings: click the panel row. Labels are localized, so the row is
+    // matched by slot structure first — nav[class*="_panelList"] >
+    // button[class*="_panelRow"] — with a label test for 插件/Plugins only as a
+    // tie-breaker when the list holds more than one row. NOTE the substring
+    // match: these elements carry several classes and the active row gains
+    // _panelActive, so a suffix match would stop finding it exactly when it
+    // matters.
+    var panelListSel = 'nav[class*="_panelList"] button[class*="_panelRow"]';
+    var panelRow = function (panel) {
+      var rows = document.querySelectorAll(panelListSel);
+      if (rows.length === 0) return null;
+      if (rows.length === 1) return rows[0];
+      var want = panel === 'plugins' ? /插件|plugins/i : null;
+      if (want === null) return null;
+      for (var i = 0; i < rows.length; i++) {
+        var label = (rows[i].getAttribute('aria-label') || rows[i].textContent || '').trim();
+        if (want.test(label)) return rows[i];
+      }
+      return null;
+    };
+    // The active panel's row carries the module's _panelActive class, which is
+    // exactly the "this surface is already on screen" signal we need.
+    var panelOpen = function (panel) {
+      var row = panelRow(panel);
+      return row !== null && /_panelActive/.test(String(row.className || ''));
+    };
+    var openPanel = function (panel) {
+      if (typeof panel !== 'string' || panel === '') return;
+      var tries = 100; // the panel list renders late on a cold boot
+      var clicks = 0; // bounded, same discipline as openSettings()
+      var attempt = function () {
+        if (panelOpen(panel)) return; // already showing this surface
+        var row = panelRow(panel);
+        if (row === null) {
+          if (--tries > 0) setTimeout(attempt, 300);
+          return;
+        }
+        if (clicks >= 2) return;
+        clicks++;
+        row.click();
+        setTimeout(attempt, 1200); // re-checks before clicking again
+      };
+      attempt();
+    };
+    if (qs.get('openPanel') !== null && qs.get('openPanel') !== '') openPanel(qs.get('openPanel'));
   } else {
     // Sidebar: report session picks and settings requests to the VS Code
     // webview. The writing tab does not receive its own storage event, so

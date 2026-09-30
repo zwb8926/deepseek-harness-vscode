@@ -207,8 +207,16 @@ function guiIframeHtml(src: string, title: string): string {
  * `opts.seedSession` writes the same selection ONCE but leaves the tab
  * following the GUI (used by the default/settings view so it never falls back
  * to a stale new-session view); `opts.openSettings` makes panel-inject click
- * the settings trigger at boot (no host-message timing involved). */
-function panelSrc(url: string, panel: "center", supported: boolean, sessionId?: string, opts?: { seedSession?: string; openSettings?: boolean }): string {
+ * the settings trigger at boot, and `opts.openPanel` one of the GUI's sidebar
+ * panels (e.g. `plugins`, the plugin manager) — no host-message timing
+ * involved either way. */
+function panelSrc(
+  url: string,
+  panel: "center",
+  supported: boolean,
+  sessionId?: string,
+  opts?: { seedSession?: string; openSettings?: boolean; openPanel?: string }
+): string {
   if (!supported) return url;
   const sep = url.includes("?") ? "&" : "?";
   let src = `${url}${sep}dshPanel=${panel}`;
@@ -218,6 +226,7 @@ function panelSrc(url: string, panel: "center", supported: boolean, sessionId?: 
     if (sessionId === undefined) src += "&seed=1";
   }
   if (opts?.openSettings === true) src += "&openSettings=1";
+  if (opts?.openPanel !== undefined && opts.openPanel !== "") src += `&openPanel=${encodeURIComponent(opts.openPanel)}`;
   return src;
 }
 
@@ -226,7 +235,11 @@ function panelSrc(url: string, panel: "center", supported: boolean, sessionId?: 
  * the embedded GUI is pinned to that conversation (`?session=` param).
  * `opts.seedSession` seeds the selection once without pinning; `opts.openSettings`
  * auto-opens the settings modal in the loaded page. */
-export function stateBody(info?: DshRuntimeInfo, sessionId?: string, opts?: { seedSession?: string; openSettings?: boolean }): string {
+export function stateBody(
+  info?: DshRuntimeInfo,
+  sessionId?: string,
+  opts?: { seedSession?: string; openSettings?: boolean; openPanel?: string }
+): string {
   switch (info?.state) {
     case "running": {
       const url = info.url ?? "";

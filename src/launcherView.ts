@@ -58,7 +58,7 @@ export interface LauncherData {
 /** Webview → extension events. */
 export type LauncherEvent =
   | { type: "reveal" }
-  | { type: "click"; kind: "status" | "new-session" | "settings" | "session" | "workspace"; sessionId?: string; workspaceId?: string }
+  | { type: "click"; kind: "status" | "new-session" | "settings" | "plugins" | "session" | "workspace"; sessionId?: string; workspaceId?: string }
   | { type: "action"; action: "rename" | "fork" | "archive"; sessionId: string; title?: string }
   | { type: "action"; action: "new-session"; workspaceId: string }
   | { type: "action"; action: "rename-workspace" | "delete-workspace"; workspaceId: string; title?: string }
@@ -72,6 +72,7 @@ const CODICONS: Record<string, string> = {
   zap: "codicon-zap",
   plus: "codicon-plus",
   gear: "codicon-gear",
+  extensions: "codicon-extensions",
   folder: "codicon-folder",
   chat: "codicon-comment",
   chatRunning: "codicon-comment-discussion",
@@ -90,6 +91,14 @@ const VIEW_CSS = `
 .codicon-zap::before { content: "\\ea86"; }
 .codicon-plus::before { content: "\\ea60"; }
 .codicon-gear::before { content: "\\eaf8"; }
+/* Codepoints are the official codicon ones. Do NOT take them from the shipped
+   font's internal glyph names: media/codicon.ttf names most glyphs differently
+   from their class (EA78 is a real glyph but it is not the extensions icon),
+   which is how the 插件 button first shipped an empty/foreign box. The mapping
+   below is cross-checked against a vendored copy of the official codicon
+   stylesheet, and scripts/verify/launcher.mjs fails if a name, its rule, or its
+   codepoint drifts. */
+.codicon-extensions::before { content: "\\eae6"; }
 .codicon-folder::before { content: "\\ea83"; }
 .codicon-comment::before { content: "\\ea6b"; }
 .codicon-comment-discussion::before { content: "\\eac7"; }
@@ -98,6 +107,9 @@ const VIEW_CSS = `
 .codicon-trash::before { content: "\\ea81"; }
 .codicon-ellipsis::before { content: "\\ea7c"; }
 .codicon-chevron-down::before { content: "\\eab4"; }
+/* icon() falls back to this glyph for an unknown key — without the rule it
+   renders as an empty box */
+.codicon-circle-outline::before { content: "\\eabc"; }
 :root { color-scheme: light dark; }
 body { margin: 0; padding: 4px 4px 8px; font-family: var(--vscode-font-family, system-ui); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground); background: transparent; }
 .launcher { display: flex; flex-direction: column; gap: 1px; }
@@ -189,6 +201,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
   <div class="toolbar">
     <input id="searchInput" class="search-input" type="text" placeholder="搜索会话…" spellcheck="false">
     <button class="toolbtn" id="btnNewSession" data-click="new-session" title="新建会话"></button>
+    <button class="toolbtn" id="btnPlugins" data-click="plugins" title="插件"></button>
     <button class="toolbtn" id="btnSettings" data-click="settings" title="设置"></button>
   </div>
   <div id="body"><div class="empty">加载中…</div></div>
@@ -203,6 +216,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
   var bodyEl = document.getElementById("body");
   var searchInput = document.getElementById("searchInput");
   var btnNewSession = document.getElementById("btnNewSession");
+  var btnPlugins = document.getElementById("btnPlugins");
   var btnSettings = document.getElementById("btnSettings");
   var expanded = {}; // workspaceId -> true (default all expanded)
   var searchQuery = "";
@@ -280,6 +294,7 @@ export function buildLauncherHtml(fontUri = "", fontCsp = ""): string {
   });
   // Toolbar icon buttons (no text) get their glyphs wired once.
   btnNewSession.innerHTML = icon("plus", "green");
+  btnPlugins.innerHTML = icon("extensions", "");
   btnSettings.innerHTML = icon("gear", "");
 
   // Search box: debounced, connected to the harness session search.
