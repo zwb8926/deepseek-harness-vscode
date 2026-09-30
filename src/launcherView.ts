@@ -91,6 +91,14 @@ const VIEW_CSS = `
 .codicon-zap::before { content: "\\ea86"; }
 .codicon-plus::before { content: "\\ea60"; }
 .codicon-gear::before { content: "\\eaf8"; }
+/* Codepoints are the official codicon ones. Do NOT take them from the shipped
+   font's internal glyph names: media/codicon.ttf names most glyphs differently
+   from their class (EA78 is a real glyph but it is not the extensions icon),
+   which is how the 插件 button first shipped an empty/foreign box. The mapping
+   below is cross-checked against a vendored copy of the official codicon
+   stylesheet, and scripts/verify/launcher.mjs fails if a name, its rule, or its
+   codepoint drifts. */
+.codicon-extensions::before { content: "\\eae6"; }
 .codicon-folder::before { content: "\\ea83"; }
 .codicon-comment::before { content: "\\ea6b"; }
 .codicon-comment-discussion::before { content: "\\eac7"; }
@@ -99,6 +107,9 @@ const VIEW_CSS = `
 .codicon-trash::before { content: "\\ea81"; }
 .codicon-ellipsis::before { content: "\\ea7c"; }
 .codicon-chevron-down::before { content: "\\eab4"; }
+/* icon() falls back to this glyph for an unknown key — without the rule it
+   renders as an empty box */
+.codicon-circle-outline::before { content: "\\eabc"; }
 :root { color-scheme: light dark; }
 body { margin: 0; padding: 4px 4px 8px; font-family: var(--vscode-font-family, system-ui); font-size: var(--vscode-font-size, 13px); color: var(--vscode-foreground); background: transparent; }
 .launcher { display: flex; flex-direction: column; gap: 1px; }

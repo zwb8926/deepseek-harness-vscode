@@ -17,7 +17,8 @@ npm run verify -- http://127.0.0.1:3080
 | `shell-check` | 离线 | 生成的外壳页**真的会执行**：bootstrap 生效（`dsh-no-tab` + 注入样式）、`iframe-ready` 握手送达、无 JS 报错 |
 | `adopt-unpatched` | 离线 | **接管未打补丁的外部服务**：裸起服务 → 确认页面无适配器 → manager 接管后运行时打补丁、`panelSupport=true` |
 | `feature-check` | 离线 | 工作区/会话创建、重命名、**标题投影回填**、归档、主题、搜索回退；空白会话不可分叉（harness 规则） |
-| `notice` | 离线 | **设置写入链路 + 内测声明确认**：新会话会弹声明（对照）→ `settings/update` 接受确认并写到 `profiles/web/cordis.patch.yml` → 新会话不再弹 → 重启后写入依旧正常 |
+| `launcher` | 离线 | **左侧原生列表**：生成的 HTML 能解析、工具栏按钮（新建会话 / 插件 / 设置）齐备、**图标名 ↔ CSS 规则 ↔ 官方 codepoint** 三者一致，并校验该 codepoint 在 `media/codicon.ttf` 里真的有字形 ——「插件按钮没图标」正是这类问题 |
+| `notice` | 离线 | **设置写入链路 + 预览版声明确认/屏蔽**：声明会被适配器隐藏（用生成产物里的抑制代码对着合成对话框验证）、真实设置弹窗不受影响、`settings/update` 接受确认并写到 `profiles/web/cordis.patch.yml`、重启后写入依旧正常 |
 | `package-check` | 离线 | **打包产物**：版本、内置 dsh、适配器与仓库逐字节一致、LibreOffice payload 已裁掉，并**从解压树真启动一次 dsh** |
 | `panels` | 实时 | **分屏不变式**（真浏览器）：center = 侧栏列被涂抹隐藏且会话占满宽度、设置弹窗仍能盖在上面打开/关闭；sidebar = 只留侧栏、会话/详情列归零 |
 | `pin` | 实时 | **每标签页会话固定**：`?session=` 在启动前写入 `dsh.sessions.current`，且应用确实开在该会话（`document.title` 跟随） |
