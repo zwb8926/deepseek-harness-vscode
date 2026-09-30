@@ -163,6 +163,56 @@ const PANEL_INJECT = `<!-- ${PANEL_MARKER} -->
   var style = document.createElement('style');
   style.textContent = alwaysOn;
   document.head.appendChild(style);
+  // The pre-release notice ("预览版说明" / "Preview Notice", previously "内测声明")
+  // is dismissed only by a SERVER-side settings write. On a deployment whose
+  // writes are rejected it can never be closed, so the embedded UI hides it: the
+  // dialog is purely informational, and the extension acknowledges it in the
+  // profile patch layer instead. This runs before the panel-mode gate so the
+  // full-GUI fallback path is covered too.
+  var noticeTitles = ['预览版说明', 'Preview Notice', '内测声明', 'Beta Notice'];
+  var noticeClicked = false;
+  var hidePreviewNotice = function () {
+    var dialogs = document.querySelectorAll('[role="dialog"]');
+    for (var i = 0; i < dialogs.length; i++) {
+      var d = dialogs[i];
+      var label = (d.getAttribute('aria-label') || '').trim();
+      var text = (d.innerText || '').trim();
+      var hit = false;
+      for (var j = 0; j < noticeTitles.length; j++) {
+        if (label === noticeTitles[j] || text.indexOf(noticeTitles[j]) === 0) { hit = true; break; }
+      }
+      if (!hit) continue;
+      // Best effort, once: a healthy server records the acknowledgement, and a
+      // broken one answers with the retry copy we are about to hide.
+      if (!noticeClicked) {
+        noticeClicked = true;
+        var noticeButton = d.querySelector('button');
+        if (noticeButton !== null) { try { noticeButton.click(); } catch (e5) {} }
+      }
+      d.style.setProperty('display', 'none', 'important');
+      // Hide a full-viewport mask above it as well, so nothing swallows clicks.
+      var up = d.parentElement;
+      for (var k = 0; k < 3 && up !== null && up !== document.body; k++) {
+        var upStyle = window.getComputedStyle(up);
+        var upRect = up.getBoundingClientRect();
+        if (upStyle.position === 'fixed' && upRect.width >= window.innerWidth * 0.9 && upRect.height >= window.innerHeight * 0.9) {
+          up.style.setProperty('display', 'none', 'important');
+        }
+        up = up.parentElement;
+      }
+      return true;
+    }
+    return false;
+  };
+  hidePreviewNotice();
+  try {
+    new MutationObserver(function () { hidePreviewNotice(); }).observe(document.documentElement, { childList: true, subtree: true });
+  } catch (e6) { /* no MutationObserver — the sweeps below still cover it */ }
+  var noticeSweeps = 0;
+  var noticeTimer = setInterval(function () {
+    hidePreviewNotice();
+    if (++noticeSweeps >= 40) clearInterval(noticeTimer);
+  }, 500);
   if (panel !== 'sidebar' && panel !== 'center') return;
   document.documentElement.setAttribute('data-dsh-panel', panel);
   // The AppFrame grid owns the three columns. Other rc.1 UI modules reuse the
