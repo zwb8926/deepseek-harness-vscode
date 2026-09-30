@@ -93,6 +93,10 @@ export interface DshOptions {
   nodeExecOverride?: string;
   /** Test hook: treat nodeExecOverride as an Electron binary (ELECTRON_RUN_AS_NODE). */
   electronNode?: boolean;
+  /** When a settings write is rejected with "root Include entry", spawn a
+   * sibling server and report whether IT accepts the same write (default true).
+   * The sibling itself is created with this off, so the probe can never nest. */
+  settingsProbe?: boolean;
   /** Called on every state transition. */
   onInfo: (info: DshRuntimeInfo) => void;
   /** Log sink. */
@@ -1211,6 +1215,10 @@ export class DshManager {
 
   private async diagnoseSettingsWrite(args: unknown): Promise<void> {
     if (this.settingsDiagDone) return;
+    // The sibling probe is created with this switched off: a nesting probe would
+    // spawn a grandchild, that one another, and so on — each booting a server
+    // against the same home.
+    if (this.opts.settingsProbe === false) return;
     this.settingsDiagDone = true;
     this.opts.log("settings: the running server REJECTS settings writes (reads keep working)");
     this.opts.log(`settings: failing child was started as ${this.lastSpawnLine ?? "(unknown)"}`);
@@ -1218,12 +1226,14 @@ export class DshManager {
       this.opts.log("settings: no resolved CLI to probe with");
       return;
     }
+    const baseLog = this.opts.log;
     const sibling = new DshManager({
       ...this.opts,
       port: 0,
       autoRestart: false,
+      settingsProbe: false,
       onInfo: () => {},
-      log: (line: string) => this.opts.log(`settings-probe: ${line}`)
+      log: (line: string) => baseLog(`settings-probe: ${line}`)
     });
     try {
       await sibling.start();
@@ -1356,6 +1366,14 @@ export class DshManager {
           .map((k) => `${k}=${env[k] ?? "-"}`)
           .join(" ")
     );
+    // The whole key list except credential-shaped names (and NOT their values):
+    // when a child behaves differently for no visible reason, the difference is
+    // usually a variable the editor host has and a plain shell does not. Key
+    // names only, so nothing secret is written to the output channel.
+    const envKeys = Object.keys(env)
+      .filter((k) => !/registry|token|secret|password|passwd|_key$|apikey|auth/i.test(k))
+      .sort();
+    this.opts.log(`       env (${envKeys.length} keys): ${envKeys.join(" ")}`);
 
     let child: ChildProcess;
     try {
